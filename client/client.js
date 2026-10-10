@@ -53,6 +53,19 @@ window.__ModuleLoader__.load({
     const FALLBACK_MAX = 50;
     /** Sort strategies offered by the header. One entry for now, by design. */
     const SORT_OPTIONS = [{ id: 'updated', labelKey: 'sort.updated' }];
+    /**
+     * Original pin glyph: a filled pushpin head with a tapered stem. Its strokes
+     * follow `currentColor` so the theme's caption token tints it, as the
+     * shipped row's pin does.
+     */
+    const PIN_ART = [
+      jsx('path', {
+        key: 'head',
+        d: 'M9.2 2.4h5.6v2.2l-1.3 1.3v3.4l1.5 1.6H7l1.5-1.6V5.9L7.2 4.6V2.4Z',
+      }),
+      jsx('path', { key: 'stem', d: 'M12 11v8.6' }),
+    ];
+
     /** Pending-interaction kinds ui-workspace gives dedicated row presentation. */
     const PENDING_KINDS = {
       approval: { labelKey: 'status.approval', compactKey: 'status.compact.approval' },
@@ -87,6 +100,9 @@ window.__ModuleLoader__.load({
       '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
       '.dshRecent_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;margin:0 6px 0 4px;font-size:14px;line-height:20px;overflow:hidden}',
       '.dshRecent_time{flex:none;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+      '.dshRecent_pin{width:16px;height:20px;flex:none;margin-left:6px;color:var(--dsw-alias-label-caption);align-items:center;justify-content:center;display:inline-flex}',
+      '.dshRecent_pin svg{width:12px;height:12px;fill:currentColor;stroke:currentColor;stroke-width:1.6;stroke-linecap:round}',
+      '.dshRecent_row:hover .dshRecent_time,.dshRecent_row:hover .dshRecent_pin{display:none}',
       '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
       '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
       '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;font-size:12px;line-height:18px}',
@@ -275,6 +291,15 @@ window.__ModuleLoader__.load({
       const statuses = sessionStatuses(status, t);
       const primary = statuses[0];
       const project = row.workspaceLabel;
+      const pin = row.pinned === true
+        ? jsx('span', {
+          key: 'pin',
+          className: 'dshRecent_pin',
+          role: 'img',
+          'aria-label': t('row.pinned'),
+          children: jsx('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', children: PIN_ART }),
+        })
+        : null;
       return jsxs('div', {
         className: selected ? 'dshRecent_row dshRecent_rowSelected' : 'dshRecent_row',
         role: 'listitem',
@@ -291,6 +316,10 @@ window.__ModuleLoader__.load({
         children: [
           jsx('span', { key: 'slot', className: 'dshRecent_slot', children: jsx(StatusCell, { statuses }) }),
           jsx('span', { key: 'title', className: 'dshRecent_title', children: displayTitle(row.title, t) }),
+          // Non-interactive marker, as the shipped row does: the pin indicator
+          // never steals the row's own click target. Hidden on hover so the
+          // trailing time can take its place, matching ui-workspace.
+          pin,
           jsx('span', {
             key: 'time',
             className: 'dshRecent_time',
@@ -359,6 +388,7 @@ window.__ModuleLoader__.load({
       const statuses = useSessionStatus((state) => state);
       const workspaces = useWorkspaces((state) => state.items);
       const archived = useWorkspaces((state) => state.archivedSessionIds);
+      const pinned = useWorkspaces((state) => state.pinnedSessionIds);
       const preference = usePreference((state) => state);
 
       const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
@@ -375,6 +405,7 @@ window.__ModuleLoader__.load({
       // provisional-blank and subagent sessions are not user-facing rows here.
       const rows = useMemo(() => {
         const archivedSet = new Set(archived ?? []);
+        const pinnedSet = new Set(pinned ?? []);
         const ownerBySession = new Map();
         for (const workspace of workspaces ?? []) {
           for (const id of workspace.sessionIds ?? []) ownerBySession.set(id, workspace);
@@ -390,7 +421,13 @@ window.__ModuleLoader__.load({
           const label = workspace === undefined
             ? pathLabel(summary.cwd)
             : workspace.title !== '' ? workspace.title : pathLabel(workspace.path);
-          collected.push({ id, title: summary.title ?? '', updatedAt: summary.updatedAt, workspaceLabel: label });
+          collected.push({
+            id,
+            title: summary.title ?? '',
+            updatedAt: summary.updatedAt,
+            workspaceLabel: label,
+            pinned: pinnedSet.has(id),
+          });
         }
         // Recency, with the Session identity as the deterministic tie-break.
         collected.sort((left, right) => right.updatedAt - left.updatedAt
@@ -615,6 +652,7 @@ window.__ModuleLoader__.load({
       'more.expand': '展开其余 {n} 个会话',
       'more.collapse': '收起',
       'session.untitled': '未命名',
+      'row.pinned': '已置顶',
       'row.project': '所属项目：{name}',
       'time.now': '刚刚',
       'time.minutes': '{n}分钟',
@@ -654,6 +692,7 @@ window.__ModuleLoader__.load({
       'more.expand': 'Show {n} more sessions',
       'more.collapse': 'Show less',
       'session.untitled': 'Untitled',
+      'row.pinned': 'Pinned',
       'row.project': 'Project: {name}',
       'time.now': 'now',
       'time.minutes': '{n}min',
