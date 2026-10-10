@@ -82,7 +82,7 @@ window.__ModuleLoader__.load({
       '.dshRecent_sortOption{border:none;border-radius:var(--dsw-radius-sm);cursor:pointer;width:100%;padding:5px 8px;color:var(--dsw-alias-label-primary);background:0 0;font:inherit;font-size:12px;line-height:18px;text-align:left;display:flex;align-items:center;gap:6px}',
       '.dshRecent_sortOption:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dshRecent_list{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px}',
-      '.dshRecent_row{border-radius:var(--dsw-radius-md);width:100%;height:32px;padding:0 8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary);align-items:center;gap:0;display:flex}',
+      '.dshRecent_row{box-sizing:border-box;border-radius:var(--dsw-radius-md);width:100%;height:32px;padding:0 8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary);align-items:center;gap:0;display:flex}',
       '.dshRecent_row:hover,.dshRecent_rowSelected{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
       '.dshRecent_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;margin:0 6px 0 4px;font-size:14px;line-height:20px;overflow:hidden}',
@@ -261,7 +261,7 @@ window.__ModuleLoader__.load({
       return jsxs(Fragment, {
         children: [
           jsx('span', { key: 'dot', className: 'dshRecent_dot', 'data-state': primary.state, 'aria-hidden': 'true' }),
-          ...statuses.map((status) => jsx('span', { key: status.label, className: 'dshRecent_hidden' }, status.label)),
+          ...statuses.map((status) => jsx('span', { key: status.label, className: 'dshRecent_hidden', children: status.label })),
         ],
       });
     }
@@ -290,7 +290,7 @@ window.__ModuleLoader__.load({
         },
         children: [
           jsx('span', { key: 'slot', className: 'dshRecent_slot', children: jsx(StatusCell, { statuses }) }),
-          jsx('span', { key: 'title', className: 'dshRecent_title' }, displayTitle(row.title, t)),
+          jsx('span', { key: 'title', className: 'dshRecent_title', children: displayTitle(row.title, t) }),
           jsx('span', {
             key: 'time',
             className: 'dshRecent_time',
