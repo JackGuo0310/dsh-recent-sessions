@@ -100,9 +100,11 @@ window.__ModuleLoader__.load({
       '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
       '.dshRecent_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;margin:0 6px 0 4px;font-size:14px;line-height:20px;overflow:hidden}',
       '.dshRecent_time{flex:none;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
-      '.dshRecent_pin{width:16px;height:20px;flex:none;margin-left:6px;color:var(--dsw-alias-label-caption);align-items:center;justify-content:center;display:inline-flex}',
-      '.dshRecent_pin svg{width:12px;height:12px;fill:currentColor;stroke:currentColor;stroke-width:1.6;stroke-linecap:round}',
-      '.dshRecent_row:hover .dshRecent_time,.dshRecent_row:hover .dshRecent_pin{display:none}',
+      // The pin occupies the same trailing cell as the time and stays visible; only
+// the time yields on hover, so a pinned row is identifiable at rest.
+      '.dshRecent_pin{width:16px;height:20px;flex:none;color:var(--dsw-alias-label-caption);align-items:center;justify-content:center;display:inline-flex}',
+      '.dshRecent_pin svg{width:13px;height:13px;fill:currentColor}',
+      '.dshRecent_row:hover .dshRecent_time{display:none}',
       '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
       '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
       '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;font-size:12px;line-height:18px}',
