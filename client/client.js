@@ -100,10 +100,15 @@ window.__ModuleLoader__.load({
       '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
       '.dshRecent_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;margin:0 6px 0 4px;font-size:14px;line-height:20px;overflow:hidden}',
       '.dshRecent_time{flex:none;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
-      // The pin occupies the same trailing cell as the time and stays visible; only
-// the time yields on hover, so a pinned row is identifiable at rest.
-      '.dshRecent_pin{width:16px;height:20px;flex:none;color:var(--dsw-alias-label-caption);align-items:center;justify-content:center;display:inline-flex}',
-      '.dshRecent_pin svg{width:13px;height:13px;fill:currentColor}',
+      // The pin occupies the trailing cell: a pinned row shows it at rest, a
+      // hovered row offers the toggle, and the time yields exactly as it does in
+      // the workspace rows. It is a real button, so pinning works from here.
+      '.dshRecent_pin{border:none;background:0 0;padding:0;cursor:pointer;width:16px;height:20px;flex:none;color:var(--dsw-alias-label-tertiary);align-items:center;justify-content:center;display:none}',
+      '.dshRecent_pin svg{width:14px;height:14px;fill:currentColor}',
+      '.dshRecent_pin[data-pinned="true"]{display:inline-flex;color:var(--dsw-alias-label-caption)}',
+      '.dshRecent_pin:hover{color:var(--dsw-alias-label-primary)}',
+      '.dshRecent_pin:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px;border-radius:var(--dsw-radius-xs)}',
+      '.dshRecent_row:hover .dshRecent_pin{display:inline-flex}',
       '.dshRecent_row:hover .dshRecent_time{display:none}',
       '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
       '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
@@ -286,22 +291,14 @@ window.__ModuleLoader__.load({
 
     /**
      * One recent-session row.
-     * @param {object} props - row facts, status, selection and translator.
+     * @param {object} props - row facts, status, selection, actions and translator.
      * @returns {object} the row element.
      */
-    function RecentRow({ row, status, selected, onOpen, t }) {
+    function RecentRow({ row, status, selected, onOpen, onTogglePin, t }) {
       const statuses = sessionStatuses(status, t);
       const primary = statuses[0];
       const project = row.workspaceLabel;
-      const pin = row.pinned === true
-        ? jsx('span', {
-          key: 'pin',
-          className: 'dshRecent_pin',
-          role: 'img',
-          'aria-label': t('row.pinned'),
-          children: jsx('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', children: PIN_ART }),
-        })
-        : null;
+      const pinned = row.pinned === true;
       return jsxs('div', {
         className: selected ? 'dshRecent_row dshRecent_rowSelected' : 'dshRecent_row',
         role: 'listitem',
@@ -318,15 +315,32 @@ window.__ModuleLoader__.load({
         children: [
           jsx('span', { key: 'slot', className: 'dshRecent_slot', children: jsx(StatusCell, { statuses }) }),
           jsx('span', { key: 'title', className: 'dshRecent_title', children: displayTitle(row.title, t) }),
-          // Non-interactive marker, as the shipped row does: the pin indicator
-          // never steals the row's own click target. Hidden on hover so the
-          // trailing time can take its place, matching ui-workspace.
-          pin,
           jsx('span', {
             key: 'time',
             className: 'dshRecent_time',
             'aria-hidden': primary.trailingLabel === undefined ? undefined : 'true',
             children: primary.trailingLabel ?? timeLabel(relativeTime(row.updatedAt, Date.now()), t),
+          }),
+          // A real toggle, unlike the shipped indicator: pinning from 「最近」 is
+          // the point of having it here. The click stays in the button so the row
+          // does not also open the Session.
+          jsx('button', {
+            key: 'pin',
+            type: 'button',
+            className: 'dshRecent_pin',
+            'data-pinned': String(pinned),
+            'aria-pressed': pinned ? 'true' : 'false',
+            'aria-label': t(pinned ? 'pin.remove' : 'pin.add'),
+            title: t(pinned ? 'pin.remove' : 'pin.add'),
+            onClick: (event) => {
+              event.stopPropagation();
+              onTogglePin(row.id, pinned);
+            },
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.stopPropagation();
+            },
+            children: jsx('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', children: PIN_ART }),
           }),
         ],
       });
@@ -379,11 +393,12 @@ window.__ModuleLoader__.load({
      * @param {object} props - slot props: owner share, standard hooks, injected actions.
      * @returns {object | null} the section element, or null in the collapsed rail.
      */
-    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, t }) {
+    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, togglePin, t }) {
       const [expanded, setExpanded] = useState(true);
       const [showAll, setShowAll] = useState(false);
       const [sort, setSort] = useState('updated');
       const [sortOpen, setSortOpen] = useState(false);
+      const [pinError, setPinError] = useState(null);
       const sortAnchor = useRef(null);
 
       const list = useSessions((state) => state);
@@ -441,6 +456,13 @@ window.__ModuleLoader__.load({
         setShowAll(false);
         openSession(id);
       }, [openSession]);
+
+      const onTogglePin = useCallback((id, isPinned) => {
+        setPinError(null);
+        togglePin(id, isPinned).then((accepted) => {
+          if (accepted !== true) setPinError('pin.failed');
+        });
+      }, [togglePin]);
 
       // The rail (56px icons) has no room for rows, and the shipped shell hides
       // this whole foot area there anyway.
@@ -504,6 +526,7 @@ window.__ModuleLoader__.load({
               status: statuses?.get(row.id),
               selected: row.id === currentId,
               onOpen,
+              onTogglePin,
               t,
             })),
           }),
@@ -515,6 +538,12 @@ window.__ModuleLoader__.load({
           onClick: () => setShowAll((value) => !value),
           children: showAll ? t('more.collapse') : t('more.expand', { n: hidden }),
         }) : null,
+        pinError === null ? null : jsx('div', {
+          key: 'pinError',
+          className: 'dshRecent_empty',
+          role: 'alert',
+          children: t(pinError),
+        }),
       ] });
 
       return jsx('div', {
@@ -592,6 +621,11 @@ window.__ModuleLoader__.load({
             }),
           ] }),
           jsx('hr', { key: 'divider', className: 'dshRecentPage_divider' }),
+          preference.status === 'ready' ? null : jsx('p', {
+            key: 'unavailable',
+            className: 'dshRecentPage_note',
+            children: t('settings.unavailable'),
+          }),
           jsxs('div', { key: 'row', className: 'dshRecentPage_row', children: [
             jsx('div', { key: 'text', children: [
               jsx('div', { key: 'title', className: 'dshRecentPage_title', children: t('settings.countTitle') }),
@@ -655,6 +689,9 @@ window.__ModuleLoader__.load({
       'more.collapse': '收起',
       'session.untitled': '未命名',
       'row.pinned': '已置顶',
+      'pin.add': '置顶会话',
+      'pin.remove': '取消置顶',
+      'pin.failed': '置顶操作失败，请重试。',
       'row.project': '所属项目：{name}',
       'time.now': '刚刚',
       'time.minutes': '{n}分钟',
@@ -678,6 +715,7 @@ window.__ModuleLoader__.load({
       'settings.saved': '设置已保存',
       'settings.failed': '无法保存设置',
       'settings.save': '保存',
+      'settings.unavailable': '宿主尚未提供本插件的配置，暂时无法修改；「最近」仍按默认 10 条显示。',
       'version.untagged': '未打标签（{ref}）',
       'version.noTag': '未打标签（{commit}）',
       'version.unknown': '未知版本',
@@ -695,6 +733,9 @@ window.__ModuleLoader__.load({
       'more.collapse': 'Show less',
       'session.untitled': 'Untitled',
       'row.pinned': 'Pinned',
+      'pin.add': 'Pin session',
+      'pin.remove': 'Unpin session',
+      'pin.failed': 'Could not change the pin. Try again.',
       'row.project': 'Project: {name}',
       'time.now': 'now',
       'time.minutes': '{n}min',
@@ -718,6 +759,7 @@ window.__ModuleLoader__.load({
       'settings.saved': 'Preference saved',
       'settings.failed': 'Could not save preference',
       'settings.save': 'Save',
+      'settings.unavailable': 'The Host is not serving this plugin\'s configuration yet, so it cannot be changed. Recent still shows the default 10.',
       'version.untagged': 'Untagged ({ref})',
       'version.noTag': 'Untagged ({commit})',
       'version.unknown': 'Unknown version',
@@ -758,38 +800,50 @@ window.__ModuleLoader__.load({
         uiWorkspace?.openSession(sessionId);
       };
 
+      // Pin state is Host-authoritative: this only issues the write and reports
+      // whether it was accepted; the pin set arrives back through `useWorkspaces`.
+      const workspaces = ctx.get('workspaces');
+      const togglePin = async (sessionId, isPinned) => {
+        if (workspaces === undefined) return false;
+        try {
+          await (isPinned ? workspaces.unpinSession(sessionId) : workspaces.pinSession(sessionId));
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
         id: 'dsh-recent-sessions',
         order: 10,
         label: () => translate.current('section.label'),
         locale: NS,
-        inject: () => ({ ...hooks(), openSession, t: translate.current }),
+        inject: () => ({ ...hooks(), openSession, togglePin, t: translate.current }),
       }, RecentSessionsSection));
 
-      // The settings page exists only where the Host serves this row's
-      // configuration, so a deployment without it shows no trace of the page.
-      ctx.effect(() => ctx.configForms.whileServed(
-        [HOST_NAMESPACE],
-        () => ctx.slots.inject('settings.section', () => ctx.slots.register({
-          name: 'settings.section',
-          id: 'dsh-recent-sessions',
-          order: 25,
-          label: () => translate.current('settings.nav'),
-          locale: NS,
-          inject: () => ({
-            ...hooks(),
-            t: translate.current,
-            saveCount: async (value) => {
-              try {
-                return await form.set('defaultCount', value);
-              } catch {
-                return false;
-              }
-            },
-          }),
-        }, RecentSessionsSettings)),
-      ), 'dsh-recent-sessions: settings section');
+      // Registered unconditionally: the navigation row is a projection of this
+      // ledger, so gating it on the Host settings namespace made the page come
+      // and go with configuration-service timing. The page itself degrades to a
+      // read-only notice when the namespace is not served.
+      ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
+        id: 'dsh-recent-sessions',
+        order: 25,
+        label: () => translate.current('settings.nav'),
+        locale: NS,
+        inject: () => ({
+          ...hooks(),
+          t: translate.current,
+          saveCount: async (value) => {
+            try {
+              return await form.set('defaultCount', value);
+            } catch {
+              return false;
+            }
+          },
+        }),
+      }, RecentSessionsSettings));
     }
 
     return { inject, apply };
