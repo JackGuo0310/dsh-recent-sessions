@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Recent Sessions",
+    "description": "Adds a collapsible Recent group below the sidebar workspaces, listing sessions across projects."
+  }
+}

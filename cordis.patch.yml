@@ -1,0 +1,19 @@
+# dsh-recent-sessions — DSH bundle patch.
+#
+# The only entry point of this package into a DSH profile. `name` is the module
+# specifier the Loader imports, so it stays the published package name; it is
+# quoted because a bare YAML scalar cannot start with `@`. `id` is the plugin's
+# own identity and must match the `name` the host half exports — and the id the
+# browser module loader keys its factory table by.
+#
+# Install with:
+#   dsh plugin --profile <profile> add <this package directory>
+- insert:
+    - id: dsh-recent-sessions
+      name: '@jackguo0310/dsh-recent-sessions'
+      config:
+        # Default number of sessions shown before 「展开更多」. Users change it on
+        # the 「最近会话」 settings page; this is the shipped fallback.
+        defaultCount: 10
+        # Hard ceiling for the settings input and for the initial render.
+        maxCount: 50

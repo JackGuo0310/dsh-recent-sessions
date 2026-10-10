@@ -1,0 +1,16 @@
+# Dependencies (the bundle has none; the Host resolves @deepseek-ai/schemastery).
+node_modules/
+
+# Build and packaging output.
+*.tgz
+*.log
+npm-debug.log*
+
+# Editor and OS noise.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local scratch: extracted CSS, inspection dumps.
+.tmp-*/

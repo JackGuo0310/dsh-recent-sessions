@@ -1,0 +1,722 @@
+/**
+ * dsh-recent-sessions — browser half.
+ *
+ * Contributes two surfaces to the Harness Web UI, both through the shell's own
+ * slot ledgers (no DOM written outside them, no shipped slot shadowed):
+ *
+ *   1. `sidebar.footer.action` — the collapsible 「最近」 section, rendered below
+ *      the workspace browsing region. It aggregates sessions across every
+ *      workspace, newest first, and reproduces the shipped session-row
+ *      presentation: same row metrics, same leading state cell, same spinner and
+ *      state dots, same relative-time and status wording, copied from
+ *      ui-workspace's Rows.module.css / WorkspaceBrowser.module.css and
+ *      ui-primitives' StateDot.module.css, with renamed classes and only
+ *      `--dsw-*` theme tokens left as the shared dependency.
+ *   2. `settings.section` — the 「最近会话」 settings page holding the one user
+ *      preference (default number of rows shown) and this repository's Git
+ *      identity, read from the generated `version-meta.js`.
+ *
+ * The 10-row default and the 「最新」 sort are user-visible copy of the Host row's
+ * config (`defaultCount`) and of the shipped recency order respectively; no
+ * value is hard-coded in the UI beyond the fallback used when the Host has not
+ * served the settings namespace yet.
+ *
+ * Known deviation from ui-workspace: its rows additionally report running
+ * subagents, which it derives from a per-workspace loaded subagent catalog. The
+ * global session status source this plugin reads carries running state, pending
+ * interaction and the completion reminder, but not that count, so a session
+ * running only subagents shows its state through the underlying running flag
+ * rather than a separate subagent line.
+ */
+
+window.__ModuleLoader__.load({
+  id: '@jackguo0310/dsh-recent-sessions',
+  factory(require) {
+    const { jsx, jsxs, Fragment } = require('react/jsx-runtime');
+    const { useCallback, useEffect, useMemo, useRef, useState } = require('react');
+
+    // dsh:version-meta:begin
+const VERSION_META = Object.freeze(
+  {
+    "repoName": "@jackguo0310/dsh-recent-sessions",
+    "tag": null,
+    "describe": null,
+    "commit": null
+  }
+);
+// dsh:version-meta:end
+    /** Dictionary namespace owned by this plugin. */
+    const NS = 'recentSessions';
+    /** Host settings namespace of this plugin's own row (its Loader entry id). */
+    const HOST_NAMESPACE = 'dsh-recent-sessions';
+    /** Shipped fallback for `defaultCount`, mirrored from the Host `Config`. */
+    const FALLBACK_COUNT = 10;
+    /** Shipped fallback for the accepted ceiling, mirrored from the Host `Config`. */
+    const FALLBACK_MAX = 50;
+    /** Sort strategies offered by the section header. One entry for now, by design. */
+    const SORT_OPTIONS = [{ id: 'updated', labelKey: 'sort.updated' }];
+    /** Pending-interaction kinds ui-workspace gives dedicated row presentation. */
+    const PENDING_KINDS = { approval: 'compact.approval', 'plan-review': 'compact.planReview', question: 'compact.answer' };
+
+    // ---------------------------------------------------------------- styles
+
+    /**
+     * Own stylesheet. Class names are prefixed so nothing here can collide with a
+     * shipped module; only `--dsw-*` theme tokens are shared.
+     */
+    const CSS = [
+      '.dshRecent_section{box-sizing:border-box;width:100%;padding:2px 0 6px;color:var(--dsw-alias-label-primary)}',
+      '.dshRecent_header{position:relative;display:flex;align-items:center;gap:4px;width:100%}',
+      '.dshRecent_toggle{border:none;border-radius:var(--dsw-radius-md);height:28px;min-width:0;padding:0 4px;cursor:pointer;background:0 0;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;flex:1 1 auto;align-items:center;gap:4px;display:flex}',
+      '.dshRecent_toggle:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_header:focus-visible,.dshRecent_toggle:focus-visible,.dshRecent_sortButton:focus-visible,.dshRecent_moreButton:focus-visible,.dshRecent_row:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}',
+      '.dshRecent_headerLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;line-height:20px;overflow:hidden;text-align:left}',
+      '.dshRecent_count{flex:none;font-size:10px;line-height:16px;opacity:.8}',
+      '.dshRecent_arrow{flex:none;transition:transform .15s var(--ds-ease-in-out)}',
+      '.dshRecent_arrowOpen{transform:rotate(90deg)}',
+      '.dshRecent_sortButton{border-radius:var(--dsw-radius-sm);cursor:pointer;height:24px;padding:0 4px;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;flex:none;align-items:center;gap:2px;font:inherit;font-size:11px;line-height:16px;display:inline-flex}',
+      '.dshRecent_sortButton:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_sortMenu{position:absolute;z-index:20;min-width:112px;border-radius:var(--dsw-radius-md);padding:4px;background:var(--dsw-alias-bg-overlay);box-shadow:var(--dsw-elevation-prominent);display:flex;flex-direction:column;gap:2px}',
+      '.dshRecent_sortOption{border:none;border-radius:var(--dsw-radius-sm);cursor:pointer;width:100%;padding:5px 8px;color:var(--dsw-alias-label-primary);background:0 0;font:inherit;font-size:12px;line-height:18px;text-align:left;display:flex;align-items:center;gap:6px}',
+      '.dshRecent_sortOption:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_list{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px}',
+      '.dshRecent_row{position:relative;border-radius:var(--dsw-radius-md);width:100%;height:32px;padding:0 8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary);align-items:center;gap:0;display:flex}',
+      '.dshRecent_row:hover,.dshRecent_rowSelected{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
+      '.dshRecent_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;margin:0 6px 0 4px;font-size:14px;line-height:20px;overflow:hidden}',
+      '.dshRecent_time{flex:none;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+      '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
+      '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
+      '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;font-size:12px;line-height:18px}',
+      '.dshRecent_hidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}',
+      // Own copy of the shipped state-dot recipe (ui-primitives StateDot.module.css),
+      // so the spinner and the pending-interaction dot read exactly as in the
+      // workspace rows while staying this plugin's own artwork.
+      '.dshRecent_dot{position:relative;display:inline-block;flex:none}',
+      '.dshRecent_dot::after{content:"";position:absolute;inset:20%;border-radius:50%;corner-shape:round;background:currentColor}',
+      '.dshRecent_dot[data-state="warning"]{color:var(--dsw-alias-state-warn-primary)}',
+      '.dshRecent_dot[data-state="error"]{color:var(--dsw-alias-state-error-primary)}',
+      '.dshRecent_dot[data-state="done"]{color:var(--dsw-alias-state-success-primary)}',
+      '.dshRecent_dot[data-state="idle"]{color:var(--dsw-alias-state-idle-primary)}',
+      '.dshRecent_spinner{flex:none;color:var(--dsw-alias-label-tertiary)}',
+      '.dshRecent_spinnerMotion{transform-origin:center;animation:dshRecentSpin 1.5s linear infinite}',
+      '.dshRecent_spinnerTrack,.dshRecent_spinnerArc{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}',
+      '.dshRecent_spinnerTrack{opacity:.25}',
+      '.dshRecent_spinnerArc{stroke-dasharray:12 150;animation:dshRecentDash 1.5s ease-in-out infinite}',
+      '@keyframes dshRecentSpin{to{transform:rotate(360deg)}}',
+      '@keyframes dshRecentDash{0%{stroke-dasharray:12 150;stroke-dashoffset:0}50%{stroke-dasharray:24 150;stroke-dashoffset:-6}100%{stroke-dasharray:12 150;stroke-dashoffset:0}}',
+      '@media (prefers-reduced-motion:reduce){.dshRecent_spinnerMotion,.dshRecent_spinnerArc{animation:none}.dshRecent_spinnerArc{stroke-dasharray:18 150;stroke-dashoffset:-3}.dshRecent_arrow{transition:none}}',
+      // Settings page.
+      '.dshRecentPage_section{min-width:0;padding:16px 0}',
+      '.dshRecentPage_repo{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
+      '.dshRecentPage_repoName{color:var(--dsw-alias-label-primary);font-weight:600}',
+      '.dshRecentPage_version{color:var(--dsw-alias-label-tertiary)}',
+      '.dshRecentPage_version[data-untagged="true"]{color:var(--dsw-alias-label-secondary)}',
+      '.dshRecentPage_divider{border:none;border-top:.5px solid var(--dsw-alias-border-l2);margin:16px 0}',
+      '.dshRecentPage_row{border-bottom:.5px solid var(--dsw-alias-border-l2);justify-content:space-between;align-items:center;gap:24px;padding:16px 0;display:flex}',
+      '.dshRecentPage_title{font-size:14px;line-height:20px}',
+      '.dshRecentPage_description{color:var(--dsw-alias-label-secondary);margin-top:4px;font-size:12px;line-height:18px}',
+      '.dshRecentPage_input{box-sizing:border-box;height:34px;width:96px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;font-variant-numeric:tabular-nums}',
+      '.dshRecentPage_input:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}',
+      '.dshRecentPage_input[aria-invalid="true"]{border-color:var(--dsw-alias-state-error-primary)}',
+      '.dshRecentPage_input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}',
+      '.dshRecentPage_error{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-error-primary)}',
+      '.dshRecentPage_footer{display:flex;align-items:center;gap:8px;padding-top:16px}',
+      '.dshRecentPage_note{flex:1;min-width:0;margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}',
+      '.dshRecentPage_save{border:1px solid transparent;border-radius:var(--dsw-radius-md);padding:5px 14px;font:inherit;font-size:13px;line-height:1.5;cursor:pointer;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}',
+      '.dshRecentPage_save:disabled{opacity:.4;cursor:default}',
+      '.dshRecentPage_save:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+    ].join('');
+
+    /**
+     * Insert the stylesheet once, tagged so a remount reuses it. Callers run this
+     * inside a `ctx.effect`, so unloading the plugin leaves nothing behind.
+     */
+    function ensureStyles() {
+      const id = `@jackguo0310/dsh-recent-sessions/recent-sessions.css`;
+      if (typeof document === 'undefined') return;
+      if (document.querySelector(`style[data-plugin-css=${JSON.stringify(id)}]`) !== null) return;
+      const tag = document.createElement('style');
+      tag.dataset.plugin = '@jackguo0310/dsh-recent-sessions';
+      tag.dataset.pluginCss = id;
+      tag.textContent = CSS;
+      document.head.appendChild(tag);
+    }
+
+    // -------------------------------------------------------------- helpers
+
+    /**
+     * Relative distance bucket, ported from ui-primitives so the row time reads
+     * exactly as the shipped rows do.
+     * @param {number} at - target instant, epoch ms.
+     * @param {number} now - current instant, epoch ms.
+     * @returns {{unit: string, n: number}} bucket and amount.
+     */
+    function relativeTime(at, now) {
+      const MIN = 6e4;
+      const HOUR = 36e5;
+      const DAY = 864e5;
+      const diff = Math.max(0, now - at);
+      if (diff < MIN) return { unit: 'now', n: 0 };
+      if (diff < HOUR) return { unit: 'minutes', n: Math.floor(diff / MIN) };
+      if (diff < DAY) return { unit: 'hours', n: Math.floor(diff / HOUR) };
+      if (diff < 30 * DAY) return { unit: 'days', n: Math.floor(diff / DAY) };
+      if (diff < 365 * DAY) return { unit: 'months', n: Math.floor(diff / (30 * DAY)) };
+      return { unit: 'years', n: Math.floor(diff / (365 * DAY)) };
+    }
+
+    /**
+     * Compact relative-time text for a row.
+     * @param {object} args - time bucket plus translate.
+     * @param {{unit: string, n: number}} args.bucket - distance bucket.
+     * @param {(key: string, params?: object) => string} args.t - translator.
+     * @returns {string} localized compact label.
+     */
+    function timeLabel({ bucket, t }) {
+      return bucket.unit === 'now' ? t('time.now') : t(`time.${bucket.unit}`, { n: bucket.n });
+    }
+
+    /**
+     * Row display title, matching the shipped fallback vocabulary.
+     * @param {object} args - row facts and translator.
+     * @param {string} args.title - stored session title, possibly empty.
+     * @param {(key: string) => string} args.t - translator.
+     * @returns {string} display title.
+     */
+    function displayTitle({ title, t }) {
+      return title !== '' ? title : t('session.untitled');
+    }
+
+    /**
+     * Session status presentation, ported from ui-workspace: pending interaction
+     * is primary and live running outranks the completion reminder.
+     * @param {object} args - status fact and translator.
+     * @param {object | undefined} args.status - global status entry for the session.
+     * @param {(key: string, params?: object) => string} args.t - translator.
+     * @returns {Array<{state: string, label: string, trailingLabel?: string}>} ordered statuses.
+     */
+    function sessionStatuses({ status, t }) {
+      const pendingKind = status === undefined ? undefined : status.pendingInteraction?.kind;
+      if (pendingKind !== undefined && PENDING_KINDS[pendingKind] !== undefined) {
+        return [{
+          state: 'warning',
+          label: t(`status.${pendingKind}`),
+          trailingLabel: t(`status.${PENDING_KINDS[pendingKind]}`),
+        }];
+      }
+      if (status?.running === true) return [{ state: 'ongoing', label: t('status.running') }];
+      if (status?.completionUnread === true) return [{ state: 'done', label: t('status.completed') }];
+      return [{ state: 'idle', label: t('status.idle') }];
+    }
+
+    /**
+     * Leading state cell: a spinner while running, otherwise the state dot, plus
+     * the screen-reader labels of every status — the shipped row's arrangement.
+     * @param {object} args - statuses and spinner size.
+     * @param {Array<object>} args.statuses - ordered statuses.
+     * @returns {object} element for the leading cell.
+     */
+    function StatusCell({ statuses }) {
+      const primary = statuses[0];
+      if (primary.state === 'ongoing') {
+        return jsxs('span', { className: 'dshRecent_spinner', 'aria-hidden': 'true' },
+          jsx('svg', { width: 14, height: 14, viewBox: '0 0 24 24', children:
+            jsx('g', { className: 'dshRecent_spinnerMotion' },
+              jsx('circle', { className: 'dshRecent_spinnerTrack', cx: 12, cy: 12, r: 9.5 }),
+              jsx('circle', { className: 'dshRecent_spinnerArc', cx: 12, cy: 12, r: 9.5 }),
+            ),
+          }),
+        );
+      }
+      return jsxs(Fragment, { children: [
+        jsx('span', { key: 'dot', className: 'dshRecent_dot', 'data-state': primary.state, 'aria-hidden': 'true' }),
+        ...statuses.map((status) => jsx('span', { key: status.label, className: 'dshRecent_hidden' }, status.label)),
+      ] });
+    }
+
+    /**
+     * Basename of a directory path; ui-workspace's ungrouped fallback.
+     * @param {string | undefined} path - directory path.
+     * @returns {string} display label.
+     */
+    function pathLabel(path) {
+      if (path === undefined || path === '') return '';
+      const parts = path.split(/[\\/]/).filter(Boolean);
+      return parts.length > 0 ? parts[parts.length - 1] : path;
+    }
+
+    /**
+     * Read one number out of the Host form snapshot, with the shipped fallback.
+     * @param {object} snapshot - config form snapshot.
+     * @param {string} field - field name.
+     * @param {number} fallback - value used while the Host has not served it.
+     * @returns {number} accepted value.
+     */
+    function readNumber(snapshot, field, fallback) {
+      const raw = snapshot.value?.[field];
+      return typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : fallback;
+    }
+
+    // ------------------------------------------------------------------ rows
+
+    /**
+     * One recent-session row.
+     * @param {object} props - row facts, status, navigation and translator.
+     * @returns {object} the row element.
+     */
+    function RecentRow({ row, status, selected, onOpen, t }) {
+      const statuses = sessionStatuses({ status, t });
+      const primary = statuses[0];
+      const now = Date.now();
+      return jsxs('div', {
+        className: `dshRecent_row${selected ? ' dshRecent_rowSelected' : ''}`,
+        role: 'listitem',
+        tabIndex: 0,
+        title: row.workspaceLabel === '' ? undefined : `${row.workspaceLabel} · ${row.title}`,
+        'aria-current': selected ? 'true' : undefined,
+        'aria-description': row.workspaceLabel === '' ? undefined : t('row.project', { name: row.workspaceLabel }),
+        onClick: () => onOpen(row.id),
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onOpen(row.id);
+        },
+      }, [
+        jsx('span', { key: 'slot', className: 'dshRecent_slot' }, jsx(StatusCell, { statuses })),
+        jsx('span', { key: 'title', className: 'dshRecent_title' }, displayTitle({ title: row.title, t })),
+        jsx('span', {
+          key: 'time',
+          className: 'dshRecent_time',
+          'aria-hidden': primary.trailingLabel === undefined ? undefined : 'true',
+        }, primary.trailingLabel ?? timeLabel({ bucket: relativeTime(row.updatedAt, now), t })),
+      ]);
+    }
+
+    /**
+     * Sort menu: currently one strategy, chosen by the section header.
+     * @param {object} props - current strategy, translator and dismissal.
+     * @returns {object} the menu element.
+     */
+    function SortMenu({ current, onPick, onClose, anchorRef, t }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        const onPointerDown = (event) => {
+          if (ref.current?.contains(event.target) === true) return;
+          if (anchorRef.current?.contains(event.target) === true) return;
+          onClose();
+        };
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') onClose();
+        };
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('keydown', onKeyDown);
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true);
+          document.removeEventListener('keydown', onKeyDown);
+        };
+      }, [anchorRef, onClose]);
+      return jsx('div', { ref, className: 'dshRecent_sortMenu', role: 'menu', 'aria-label': t('sort.label') },
+        SORT_OPTIONS.map((option) => jsxs('button', {
+          key: option.id,
+          type: 'button',
+          role: 'menuitemradio',
+          'aria-checked': option.id === current ? 'true' : 'false',
+          className: 'dshRecent_sortOption',
+          onClick: () => {
+            onPick(option.id);
+            onClose();
+          },
+        }, [
+          jsx('span', { key: 'mark', 'aria-hidden': 'true' }, option.id === current ? '✓' : ''),
+          jsx('span', { key: 'label' }, t(option.labelKey)),
+        ])),
+      );
+    }
+
+    /**
+     * The 「最近」 section contributed to the sidebar foot.
+     * @param {object} props - slot props: owner share, standard hooks, injected actions.
+     * @returns {object | null} the section element, or null in the collapsed rail.
+     */
+    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, t }) {
+      const [expanded, setExpanded] = useState(true);
+      const [showAll, setShowAll] = useState(false);
+      const [sort, setSort] = useState('updated');
+      const [sortOpen, setSortOpen] = useState(false);
+      const sortAnchor = useRef(null);
+
+      const list = useSessions((state) => state);
+      const statuses = useSessionStatus((state) => state);
+      const workspaces = useWorkspaces((state) => state.items);
+      const archived = useWorkspaces((state) => state.archivedSessionIds);
+      const preference = usePreference((state) => state);
+
+      const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
+      const defaultCount = Math.min(readNumber(preference, 'defaultCount', FALLBACK_COUNT), maxCount);
+
+      // Fold the framework sources into one cross-workspace view. Archived,
+      // provisional-blank and subagent sessions are not user-facing rows here.
+      // The selected Session is the one the main view retains, the same signal
+      // ui-workspace uses for its active-workspace tint.
+      const currentId = useMemo(() => {
+        const retained = Object.entries(list.byId ?? {}).find(([, summary]) => (summary.retainedBy?.mainView ?? 0) > 0);
+        return retained?.[0];
+      }, [list.byId]);
+
+      const rows = useMemo(() => {
+        const archivedSet = new Set(archived ?? []);
+        const ownerBySession = new Map();
+        for (const workspace of workspaces) {
+          for (const id of workspace.sessionIds) ownerBySession.set(id, workspace);
+        }
+        const collected = [];
+        for (const id of list.ids ?? []) {
+          const summary = list.byId?.[id];
+          if (summary === undefined) continue;
+          if (summary.blank === true) continue;
+          if (summary.origin === 'subagent') continue;
+          if (archivedSet.has(id)) continue;
+          const workspace = ownerBySession.get(id);
+          const workspaceLabel = workspace === undefined
+            ? pathLabel(summary.cwd)
+            : workspace.title !== '' ? workspace.title : pathLabel(workspace.path);
+          collected.push({ id, title: summary.title ?? '', updatedAt: summary.updatedAt, workspaceLabel });
+        }
+        // Recency, with the Session identity as the deterministic tie-break.
+        collected.sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+        return collected;
+      }, [archived, list, workspaces]);
+
+      const onOpen = useCallback((id) => {
+        setShowAll(false);
+        openSession(id);
+      }, [openSession]);
+
+      const visible = showAll ? rows : rows.slice(0, defaultCount);
+      const hidden = Math.max(0, rows.length - defaultCount);
+      const sortLabel = SORT_OPTIONS.find((option) => option.id === sort)?.labelKey ?? SORT_OPTIONS[0].labelKey;
+
+      if (!wide) return null;
+
+      return jsxs('div', { className: 'dshRecent_section' }, [
+        jsx('div', { key: 'head', className: 'dshRecent_header' }, [
+          jsxs('button', {
+            key: 'toggle',
+            type: 'button',
+            className: 'dshRecent_toggle',
+            'aria-expanded': expanded,
+            'aria-label': t('section.label'),
+            onClick: () => setExpanded((value) => !value),
+          }, [
+            jsx('span', { key: 'arrow', className: `dshRecent_arrow${expanded ? ' dshRecent_arrowOpen' : ''}`, 'aria-hidden': 'true' }, '▸'),
+            jsx('span', { key: 'label', className: 'dshRecent_headerLabel' }, t('section.label')),
+            rows.length > 0 && jsx('span', { key: 'count', className: 'dshRecent_count' }, String(rows.length)),
+          ]),
+          jsx('button', {
+            key: 'sort',
+            ref: sortAnchor,
+            type: 'button',
+            className: 'dshRecent_sortButton',
+            'aria-haspopup': 'menu',
+            'aria-expanded': sortOpen,
+            'aria-label': t('sort.button', { current: t(sortLabel) }),
+            onClick: () => setSortOpen((value) => !value),
+          }, [
+            jsx('span', { key: 'label' }, t(sortLabel)),
+            jsx('span', { key: 'caret', 'aria-hidden': 'true' }, '▾'),
+          ]),
+          sortOpen && jsx(SortMenu, {
+            key: 'menu',
+            current: sort,
+            anchorRef: sortAnchor,
+            onPick: setSort,
+            onClose: () => setSortOpen(false),
+            t,
+          }),
+        ]),
+        expanded && jsxs('div', { key: 'body' }, [
+          rows.length === 0
+            ? jsx('div', { key: 'empty', className: 'dshRecent_empty' }, t('empty'))
+            : jsx('div', {
+              key: 'list',
+              className: 'dshRecent_list',
+              role: 'list',
+              style: showAll ? { maxHeight: '40vh' } : undefined,
+            }, visible.map((row) => jsx(RecentRow, {
+              key: row.id,
+              row,
+              status: statuses?.get(row.id),
+              selected: row.id === currentId,
+              onOpen,
+              t,
+            }))),
+          hidden > 0 && jsx('button', {
+            key: 'more',
+            type: 'button',
+            className: 'dshRecent_moreButton',
+            'aria-expanded': showAll,
+            onClick: () => setShowAll((value) => !value),
+          }, showAll ? t('more.collapse') : t('more.expand', { n: hidden })),
+        ]),
+      ]);
+    }
+
+    // -------------------------------------------------------- settings page
+
+    /**
+     * Read one repository fact for the settings header.
+     * @param {string} tag - tag at HEAD, or empty.
+     * @param {string} describe - nearest-tag description, or empty.
+     * @param {string} commit - short commit id, or empty.
+     * @param {(key: string, params?: object) => string} t - translator.
+     * @returns {{text: string, untagged: boolean}} header version text.
+     */
+    function versionText({ tag, describe, commit }, t) {
+      if (tag !== '') return { text: tag, untagged: false };
+      if (describe !== '') return { text: t('version.untagged', { ref: describe }), untagged: true };
+      if (commit !== '') return { text: t('version.noTag', { commit }), untagged: true };
+      return { text: t('version.unknown'), untagged: true };
+    }
+
+    /**
+     * The 「最近会话」 settings page: repository identity plus the one
+     * user-editable preference.
+     * @param {object} props - slot props: locale seat, preference hook, writer.
+     * @returns {object} the page element.
+     */
+    function RecentSessionsSettings({ usePreference, saveCount, t }) {
+      const preference = usePreference((state) => state);
+      const stored = readNumber(preference, 'defaultCount', FALLBACK_COUNT);
+      const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
+      const writable = preference.status === 'ready' && preference.writable;
+      const [draft, setDraft] = useState(String(stored));
+      const [notice, setNotice] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      // Adopt a Host-side change (another window, a reset) while not being edited.
+      const focused = useRef(false);
+      useEffect(() => {
+        if (focused.current !== true) setDraft(String(stored));
+      }, [stored]);
+
+      const parsed = Number.parseInt(draft, 10);
+      const invalid = !Number.isInteger(parsed) || parsed < 1 || parsed > maxCount;
+      const dirty = invalid === false && parsed !== stored;
+      const meta = VERSION_META ?? {};
+      const version = versionText({
+        tag: meta.tag ?? '',
+        describe: meta.describe ?? '',
+        commit: meta.commit ?? '',
+      }, t);
+
+      const submit = async () => {
+        if (invalid || dirty === false || busy) return;
+        setBusy(true);
+        setNotice(null);
+        const accepted = await saveCount(parsed);
+        setBusy(false);
+        setNotice(accepted ? 'saved' : 'failed');
+        if (accepted) focused.current = false;
+      };
+
+      return jsx('div', { className: 'dshRecentPage_section' }, [
+        jsxs('div', { key: 'repo', className: 'dshRecentPage_repo' }, [
+          jsx('span', { key: 'name', className: 'dshRecentPage_repoName' }, meta.repoName ?? t('version.unknownRepo')),
+          jsx('span', { key: 'version', className: 'dshRecentPage_version', 'data-untagged': String(version.untagged) }, version.text),
+        ]),
+        jsx('hr', { key: 'divider', className: 'dshRecentPage_divider' }),
+        jsxs('div', { key: 'row', className: 'dshRecentPage_row' }, [
+          jsx('div', { key: 'text' }, [
+            jsx('div', { key: 'title', className: 'dshRecentPage_title' }, t('settings.countTitle')),
+            jsx('div', { key: 'description', className: 'dshRecentPage_description' }, t('settings.countDescription', { max: maxCount })),
+          ]),
+          jsx('input', {
+            key: 'input',
+            className: 'dshRecentPage_input',
+            type: 'number',
+            inputMode: 'numeric',
+            min: 1,
+            max: maxCount,
+            step: 1,
+            value: draft,
+            disabled: !writable || busy,
+            'aria-invalid': invalid ? 'true' : undefined,
+            'aria-label': t('settings.countTitle'),
+            onFocus: () => { focused.current = true; },
+            onChange: (event) => {
+              setDraft(event.target.value);
+              setNotice(null);
+            },
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              void submit();
+            },
+          }),
+        ]),
+        invalid && jsx('p', { key: 'invalid', className: 'dshRecentPage_error', role: 'alert' }, t('settings.invalid', { max: maxCount })),
+        jsxs('div', { key: 'footer', className: 'dshRecentPage_footer' }, [
+          jsx('p', { key: 'note', className: 'dshRecentPage_note', role: 'status' },
+            notice === null ? '' : t(`settings.${notice}`)),
+          jsx('button', {
+            key: 'save',
+            type: 'button',
+            className: 'dshRecentPage_save',
+            disabled: !writable || busy || invalid || dirty === false,
+            onClick: () => { void submit(); },
+          }, t('settings.save')),
+        ]),
+      ]);
+    }
+
+    // -------------------------------------------------------------- locales
+
+    /** Simplified Chinese dictionary (the key-set source of truth). */
+    const zh = {
+      'section.label': '最近',
+      'sort.label': '排序方式',
+      'sort.button': '排序方式：{current}',
+      'sort.updated': '最新',
+      'empty': '还没有会话',
+      'more.expand': '展开其余 {n} 个会话',
+      'more.collapse': '收起',
+      'session.untitled': '未命名',
+      'row.project': '所属项目：{name}',
+      'time.now': '刚刚',
+      'time.minutes': '{n}分钟',
+      'time.hours': '{n}小时',
+      'time.days': '{n}天',
+      'time.months': '{n}个月',
+      'time.years': '{n}年',
+      'status.approval': '等待审批',
+      'status.plan-review': '计划待审',
+      'status.question': '等待回答',
+      'status.running': '进行中',
+      'status.completed': '已完成',
+      'status.idle': '空闲',
+      'status.compact.approval': '待审批',
+      'status.compact.planReview': '计划待审',
+      'status.compact.answer': '待回答',
+      'settings.nav': '最近会话',
+      'settings.countTitle': '默认显示条数',
+      'settings.countDescription': '「最近」分组在点击「展开更多」前显示的会话数量，最大 {max} 条。',
+      'settings.invalid': '请输入 1 到 {max} 之间的整数。',
+      'settings.saved': '设置已保存',
+      'settings.failed': '无法保存设置',
+      'settings.save': '保存',
+      'version.untagged': '未打标签（{ref}）',
+      'version.noTag': '未打标签（{commit}）',
+      'version.unknown': '未知版本',
+      'version.unknownRepo': '未知仓库',
+    };
+
+    /** English dictionary, checked complete against the zh key set. */
+    const en = {
+      'section.label': 'Recent',
+      'sort.label': 'Sort order',
+      'sort.button': 'Sort: {current}',
+      'sort.updated': 'Newest',
+      'empty': 'No sessions yet',
+      'more.expand': 'Show {n} more sessions',
+      'more.collapse': 'Show less',
+      'session.untitled': 'Untitled',
+      'row.project': 'Project: {name}',
+      'time.now': 'now',
+      'time.minutes': '{n}min',
+      'time.hours': '{n}h',
+      'time.days': '{n}d',
+      'time.months': '{n}mo',
+      'time.years': '{n}y',
+      'status.approval': 'Waiting for approval',
+      'status.plan-review': 'Plan awaiting review',
+      'status.question': 'Waiting for answer',
+      'status.running': 'Running',
+      'status.completed': 'Completed',
+      'status.idle': 'Idle',
+      'status.compact.approval': 'Approval',
+      'status.compact.planReview': 'Plan review',
+      'status.compact.answer': 'Answer',
+      'settings.nav': 'Recent Sessions',
+      'settings.countTitle': 'Default number of sessions shown',
+      'settings.countDescription': 'How many sessions the Recent group shows before 「Show more」, up to {max}.',
+      'settings.invalid': 'Enter a whole number between 1 and {max}.',
+      'settings.saved': 'Preference saved',
+      'settings.failed': 'Could not save preference',
+      'settings.save': 'Save',
+      'version.untagged': 'Untagged ({ref})',
+      'version.noTag': 'Untagged ({commit})',
+      'version.unknown': 'Unknown version',
+      'version.unknownRepo': 'Unknown repository',
+    };
+
+    /** Per-section translator, resolved once and followed for the locale revision. */
+    const translate = { current: (key, params) => key };
+
+    // ----------------------------------------------------------------- body
+
+    /** Services used by the browser half. */
+    const inject = ['slots', 'locale', 'uiWorkspace', 'configForms'];
+
+    /**
+     * Mount both surfaces.
+     * @param {object} ctx - Client Cordis context.
+     */
+    function apply(ctx) {
+      ctx.effect(() => {
+        ensureStyles();
+        const off = ctx.locale.register(NS, { zh, en });
+        return off;
+      }, 'dsh-recent-sessions: dictionaries');
+
+      const locale = ctx.get('locale');
+      if (locale !== undefined) {
+        const bound = locale.bind(NS);
+        translate.current = (key, params) => bound(key, params);
+      }
+
+      // One Host form backs both surfaces, so a change on the settings page is
+      // visible in the sidebar without a reload.
+      const form = ctx.configForms.get(HOST_NAMESPACE);
+      const face = () => ({ hooks: { preference: form } });
+
+      const uiWorkspace = ctx.get('uiWorkspace');
+      const openSession = (sessionId) => {
+        uiWorkspace?.openSession(sessionId);
+      };
+
+      const sidebarInjected = () => ({ ...face(), openSession });
+      const settingsInjected = () => ({
+        ...face(),
+        saveCount: async (value) => {
+          try {
+            return await form.set('defaultCount', value);
+          } catch {
+            return false;
+          }
+        },
+      });
+
+      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+        name: 'sidebar.footer.action',
+        id: 'dsh-recent-sessions',
+        order: 10,
+        label: () => translate.current('section.label'),
+        locale: NS,
+        inject: sidebarInjected,
+      }, RecentSessionsSection));
+
+      // The settings page only exists where the Host serves this row's
+      // configuration, so a deployment without it shows no trace of the page.
+      ctx.effect(() => ctx.configForms.whileServed([HOST_NAMESPACE], () => ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
+        id: 'dsh-recent-sessions',
+        order: 25,
+        label: () => translate.current('settings.nav'),
+        locale: NS,
+        inject: settingsInjected,
+      }, RecentSessionsSettings))), 'dsh-recent-sessions: settings section');
+    }
+
+    return { inject, apply };
+  },
+});
