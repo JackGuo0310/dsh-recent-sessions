@@ -54,16 +54,24 @@ window.__ModuleLoader__.load({
     /** Sort strategies offered by the header. One entry for now, by design. */
     const SORT_OPTIONS = [{ id: 'updated', labelKey: 'sort.updated' }];
     /**
-     * Original pin glyph: a filled pushpin head with a tapered stem. Its strokes
-     * follow `currentColor` so the theme's caption token tints it, as the
-     * shipped row's pin does.
+     * Pin glyph, matching the one the workspace rows use so a pinned Session
+     * reads identically in both places. The geometry follows the shipped
+     * MIT-licensed icon; only the class names are this plugin's own.
      */
+    const PIN_VIEW_BOX = '0 0 16 16';
     const PIN_ART = [
       jsx('path', {
         key: 'head',
-        d: 'M9.2 2.4h5.6v2.2l-1.3 1.3v3.4l1.5 1.6H7l1.5-1.6V5.9L7.2 4.6V2.4Z',
+        d: 'M9.96976 1.70572L13.1554 3.93629L10.9019 8.12317L11.5158 11.605L10.7192 12.7427L2.52767 7.00693L3.3243 5.86922L6.80612 5.25528L9.96976 1.70572Z',
+        fill: 'currentColor',
+        stroke: 'currentColor',
+        strokeLinejoin: 'round',
       }),
-      jsx('path', { key: 'stem', d: 'M12 11v8.6' }),
+      jsx('path', {
+        key: 'stem',
+        d: 'M6.05285 9.47511C6.27284 9.16094 6.70586 9.08458 7.02003 9.30457C7.3342 9.52455 7.41055 9.95757 7.19057 10.2717L3.98587 14.4708L3.21223 13.9291L6.05285 9.47511Z',
+        fill: 'currentColor',
+      }),
     ];
 
     /** Pending-interaction kinds ui-workspace gives dedicated row presentation. */
@@ -340,7 +348,7 @@ window.__ModuleLoader__.load({
               if (event.key !== 'Enter' && event.key !== ' ') return;
               event.stopPropagation();
             },
-            children: jsx('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', children: PIN_ART }),
+            children: jsx('svg', { viewBox: PIN_VIEW_BOX, 'aria-hidden': 'true', children: PIN_ART }),
           }),
         ],
       });
