@@ -11,9 +11,13 @@
  * The tunable `defaultCount` lives in this row's `config` rather than in plugin
  * state, so a user's value survives a bundle upgrade: the profile's own patch
  * layer keeps the override while this shipped default moves.
+ *
+ * `.volatile()` marks each field as the live, settings-backed kind, which is what
+ * makes the Host project this row into the settings surface the Client's
+ * `configForms.get('dsh-recent-sessions')` reads.
  */
 
-import { Schema } from '@deepseek-ai/schemastery';
+import z from '@deepseek-ai/schemastery';
 
 /** Stable Cordis plugin name; matches the row id in cordis.patch.yml. */
 export const name = 'dsh-recent-sessions';
@@ -22,10 +26,10 @@ export const name = 'dsh-recent-sessions';
 export const inject = [];
 
 /** Shipped defaults and the accepted range of the one user preference. */
-export const Config = Schema.object({
-  defaultCount: Schema.natural().min(1).max(50).default(10),
-  maxCount: Schema.natural().min(1).max(200).default(50),
-}).default({});
+export const Config = z.object({
+  defaultCount: z.number().step(1).min(1).max(50).default(10).volatile(),
+  maxCount: z.number().step(1).min(1).max(200).default(50).volatile(),
+});
 
 /**
  * Mount the host half.
