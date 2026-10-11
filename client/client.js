@@ -38,8 +38,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.2.0",
-    "describe": "v0.2.0",
+    "tag": "v0.2.1",
+    "describe": "v0.2.1",
     "commit": null
   }
 );
@@ -143,7 +143,10 @@ const VERSION_META = Object.freeze(
       // Own copy of the shipped state-dot recipe (ui-primitives StateDot.module.css):
       // the spinner and the pending-interaction dot read exactly as in the
       // workspace rows while staying this plugin's own artwork.
-      '.dshRecent_dot{position:relative;display:inline-block;flex:none}',
+      // The dot element needs its own box: the shipped StateDot writes
+      // width/height inline, and `::after` insets itself against that box. With
+      // no size the inset resolves to zero and no state colour would paint.
+      '.dshRecent_dot{position:relative;display:inline-block;flex:none;width:10px;height:10px}',
       '.dshRecent_dot::after{content:"";position:absolute;inset:20%;border-radius:50%;corner-shape:round;background:currentColor}',
       '.dshRecent_dot[data-state="warning"]{color:var(--dsw-alias-state-warn-primary)}',
       '.dshRecent_dot[data-state="error"]{color:var(--dsw-alias-state-error-primary)}',
