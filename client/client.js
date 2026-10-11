@@ -38,8 +38,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.2.1",
-    "describe": "v0.2.1",
+    "tag": "v0.2.2",
+    "describe": "v0.2.2",
     "commit": null
   }
 );
@@ -314,13 +314,17 @@ const VERSION_META = Object.freeze(
     }
 
     /**
-     * Leading state cell: a spinner while running, otherwise the state dot, plus
-     * one screen-reader label per status — the shipped row's arrangement.
+     * Leading state cell. Idle draws nothing at all — the shipped workspace row
+     * only shows a state cell when the primary status is not idle, so idle rows
+     * stay visually quiet instead of carrying a permanent grey dot. A running
+     * session shows the spinner; pending interaction and the completion reminder
+     * show the dot plus one screen-reader label per status.
      * @param {object} props - ordered statuses.
-     * @returns {object} element for the leading cell.
+     * @returns {object | null} element for the leading cell, or null when idle.
      */
     function StatusCell({ statuses }) {
       const primary = statuses[0];
+      if (primary.state === 'idle') return null;
       if (primary.state === 'ongoing') {
         return jsx('svg', {
           className: 'dshRecent_spinner',
