@@ -27,8 +27,10 @@ export const inject = [];
 
 /** Shipped defaults and the accepted range of the user preferences. */
 export const Config = z.object({
-  /** Rows shown before 「展开更多」. */
+  /** Rows shown before the first 「展开更多」 action. */
   defaultCount: z.number().step(1).min(1).max(50).default(10).volatile(),
+  /** Additional rows rendered by every 「展开更多」 action. */
+  expandStep: z.number().step(1).min(1).max(100).default(20).volatile(),
   /** Height of the list expressed in session rows; beyond it the list scrolls. */
   visibleRows: z.number().step(1).min(1).max(30).default(5).volatile(),
   /** Accepted ceiling of `defaultCount`. */
@@ -50,6 +52,7 @@ export function apply(_ctx) {}
 /** Shipped defaults mirrored for the browser half's offline fallback. */
 export const DEFAULT_CONFIG = Object.freeze({
   defaultCount: 10,
+  expandStep: 20,
   visibleRows: 5,
   maxCount: 50,
   maxRows: 30,

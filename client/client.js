@@ -38,8 +38,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.1.1",
-    "describe": "v0.1.1",
+    "tag": "v0.2.0",
+    "describe": "v0.2.0",
     "commit": null
   }
 );
@@ -50,6 +50,8 @@ const VERSION_META = Object.freeze(
     const HOST_NAMESPACE = 'dsh-recent-sessions';
     /** Shipped fallback for `defaultCount`, mirrored from the Host `Config`. */
     const FALLBACK_COUNT = 10;
+    /** Shipped fallback for `expandStep`, mirrored from the Host `Config`. */
+    const FALLBACK_STEP = 20;
     /** Shipped fallback for `visibleRows`, mirrored from the Host `Config`. */
     const FALLBACK_ROWS = 5;
     /** Shipped fallback for the accepted count ceiling, mirrored from the `Config`. */
@@ -446,7 +448,7 @@ const VERSION_META = Object.freeze(
      */
     function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, t }) {
       const [expanded, setExpanded] = useState(true);
-      const [showAll, setShowAll] = useState(false);
+      const [limit, setLimit] = useState(null);
       const [sort, setSort] = useState('updated');
       const [sortOpen, setSortOpen] = useState(false);
       const [pins, setPins] = useState(readLocalPins);
@@ -460,7 +462,12 @@ const VERSION_META = Object.freeze(
 
       const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
       const defaultCount = Math.min(readNumber(preference, 'defaultCount', FALLBACK_COUNT), maxCount);
+      const expandStep = Math.min(readNumber(preference, 'expandStep', FALLBACK_STEP), maxCount);
       const visibleRows = readNumber(preference, 'visibleRows', FALLBACK_ROWS);
+      // `null` means "at the configured default"; the first 「展开更多」 turns it
+      // into an explicit row count, so 展开 grows by one step instead of dumping
+      // every session into the DOM.
+      const shown = limit === null ? defaultCount : limit;
 
       // The selected Session is the one the main view retains — the same signal
       // ui-workspace uses for its active-workspace tint.
@@ -505,7 +512,7 @@ const VERSION_META = Object.freeze(
       }, [archived, list, pins, workspaces]);
 
       const onOpen = useCallback((id) => {
-        setShowAll(false);
+        setLimit(null);
         openSession(id);
       }, [openSession]);
 
@@ -523,8 +530,11 @@ const VERSION_META = Object.freeze(
       // this whole foot area there anyway.
       if (!wide) return null;
 
-      const visible = showAll ? rows : rows.slice(0, defaultCount);
-      const hidden = Math.max(0, rows.length - defaultCount);
+      // Rendered rows stay bounded: the 「展开更多」 control adds one configured step
+      // at a time rather than materializing every session at once.
+      const visible = rows.slice(0, shown);
+      const remaining = Math.max(0, rows.length - shown);
+      const expandedOnce = limit !== null;
       // The height preference is expressed in rows, so the list occupies a fixed
       // multiple of the row pitch and scrolls past that.
       const listStyle = { maxHeight: `${visibleRows * ROW_HEIGHT + Math.max(0, visibleRows - 1) * ROW_GAP}px` };
@@ -589,13 +599,18 @@ const VERSION_META = Object.freeze(
               t,
             })),
           }),
-        hidden > 0 ? jsx('button', {
+        remaining > 0 || expandedOnce ? jsx('button', {
           key: 'more',
           type: 'button',
           className: 'dshRecent_moreButton',
-          'aria-expanded': showAll,
-          onClick: () => setShowAll((value) => !value),
-          children: showAll ? t('more.collapse') : t('more.expand', { n: hidden }),
+          'aria-expanded': expandedOnce,
+          onClick: () => {
+            if (remaining > 0) setLimit(shown + expandStep);
+            else setLimit(null);
+          },
+          children: remaining > 0
+            ? t('more.expand', { n: Math.min(expandStep, remaining), left: remaining })
+            : t('more.collapse'),
         }) : null,
       ] });
 
@@ -630,6 +645,7 @@ const VERSION_META = Object.freeze(
       const preference = usePreference((state) => state);
       const stored = {
         defaultCount: readNumber(preference, 'defaultCount', FALLBACK_COUNT),
+        expandStep: readNumber(preference, 'expandStep', FALLBACK_STEP),
         visibleRows: readNumber(preference, 'visibleRows', FALLBACK_ROWS),
       };
       const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
@@ -639,7 +655,11 @@ const VERSION_META = Object.freeze(
       // yet, so it is shown as unavailable rather than silently ignored.
       const served = preference.value ?? {};
       const isServed = (field) => Object.hasOwn(served, field);
-      const [draft, setDraft] = useState({ count: String(stored.defaultCount), rows: String(stored.visibleRows) });
+      const [draft, setDraft] = useState({
+        count: String(stored.defaultCount),
+        step: String(stored.expandStep),
+        rows: String(stored.visibleRows),
+      });
       const [notice, setNotice] = useState(null);
       const [busy, setBusy] = useState(false);
       // Adopt a Host-side change (reset, another window) while not being edited.
@@ -647,16 +667,26 @@ const VERSION_META = Object.freeze(
 
       useEffect(() => {
         if (editing.current !== true) {
-          setDraft({ count: String(stored.defaultCount), rows: String(stored.visibleRows) });
+          setDraft({
+            count: String(stored.defaultCount),
+            step: String(stored.expandStep),
+            rows: String(stored.visibleRows),
+          });
         }
-      }, [stored.defaultCount, stored.visibleRows]);
+      }, [stored.defaultCount, stored.expandStep, stored.visibleRows]);
 
-      const parsed = { count: Number.parseInt(draft.count, 10), rows: Number.parseInt(draft.rows, 10) };
+      const parsed = {
+        count: Number.parseInt(draft.count, 10),
+        step: Number.parseInt(draft.step, 10),
+        rows: Number.parseInt(draft.rows, 10),
+      };
       const invalid = {
         count: !Number.isInteger(parsed.count) || parsed.count < 1 || parsed.count > maxCount,
+        step: !Number.isInteger(parsed.step) || parsed.step < 1 || parsed.step > maxCount,
         rows: !Number.isInteger(parsed.rows) || parsed.rows < 1 || parsed.rows > maxRows,
       };
       const dirty = (invalid.count === false && parsed.count !== stored.defaultCount)
+        || (invalid.step === false && parsed.step !== stored.expandStep)
         || (invalid.rows === false && parsed.rows !== stored.visibleRows);
       const meta = VERSION_META ?? {};
       const version = versionText({
@@ -666,10 +696,14 @@ const VERSION_META = Object.freeze(
       }, t);
 
       const submit = async () => {
-        if (invalid.count || invalid.rows || dirty === false || busy) return;
+        if (invalid.count || invalid.step || invalid.rows || dirty === false || busy) return;
         setBusy(true);
         setNotice(null);
-        const accepted = await saveValues({ defaultCount: parsed.count, visibleRows: parsed.rows });
+        const accepted = await saveValues({
+          defaultCount: parsed.count,
+          expandStep: parsed.step,
+          visibleRows: parsed.rows,
+        });
         setBusy(false);
         setNotice(accepted ? 'settings.saved' : 'settings.failed');
         if (accepted) editing.current = false;
@@ -746,6 +780,15 @@ const VERSION_META = Object.freeze(
             bad: invalid.count,
           }),
           numberRow({
+            field: 'expandStep',
+            draftKey: 'step',
+            titleKey: 'settings.stepTitle',
+            descriptionKey: 'settings.stepDescription',
+            max: maxCount,
+            value: draft.step,
+            bad: invalid.step,
+          }),
+          numberRow({
             field: 'visibleRows',
             draftKey: 'rows',
             titleKey: 'settings.rowsTitle',
@@ -754,7 +797,7 @@ const VERSION_META = Object.freeze(
             value: draft.rows,
             bad: invalid.rows,
           }),
-          invalid.count || invalid.rows
+          invalid.count || invalid.step || invalid.rows
             ? jsx('p', {
               key: 'invalid',
               className: 'dshRecentPage_error',
@@ -773,7 +816,7 @@ const VERSION_META = Object.freeze(
               key: 'save',
               type: 'button',
               className: 'dshRecentPage_save',
-              disabled: !writable || busy || invalid.count || invalid.rows || dirty === false,
+              disabled: !writable || busy || invalid.count || invalid.step || invalid.rows || dirty === false,
               onClick: () => { void submit(); },
               children: t('settings.save'),
             }),
@@ -791,7 +834,7 @@ const VERSION_META = Object.freeze(
       'sort.button': '排序方式：{current}',
       'sort.updated': '最新',
       'empty': '还没有会话',
-      'more.expand': '展开其余 {n} 个会话',
+      'more.expand': '再显示 {n} 个（剩余 {left} 个）',
       'more.collapse': '收起',
       'session.untitled': '未命名',
       'row.pinned': '已置顶',
@@ -816,9 +859,11 @@ const VERSION_META = Object.freeze(
       'settings.nav': '最近会话',
       'settings.countTitle': '默认显示条数',
       'settings.countDescription': '「最近」在点击「展开更多」前收录的会话数量，最大 {max} 条。',
+      'settings.stepTitle': '每次展开条数',
+      'settings.stepDescription': '每次点击「再显示」新增渲染的会话数量，最大 {max} 条。',
       'settings.rowsTitle': '显示高度（会话条数）',
       'settings.rowsDescription': '「最近」占用的高度，按会话条目数计算；超出部分用鼠标滚动查看，最大 {max} 条。',
-      'settings.invalid': '条数请输入 1 到 {maxCount} 之间的整数，高度请输入 1 到 {maxRows} 之间的整数。',
+      'settings.invalid': '默认条数和展开步长请输入 1 到 {maxCount} 之间的整数，高度请输入 1 到 {maxRows} 之间的整数。',
       'settings.saved': '设置已保存',
       'settings.failed': '无法保存设置',
       'settings.save': '保存',
@@ -837,7 +882,7 @@ const VERSION_META = Object.freeze(
       'sort.button': 'Sort: {current}',
       'sort.updated': 'Newest',
       'empty': 'No sessions yet',
-      'more.expand': 'Show {n} more sessions',
+      'more.expand': 'Show {n} more ({left} remaining)',
       'more.collapse': 'Show less',
       'session.untitled': 'Untitled',
       'row.pinned': 'Pinned in Recent',
@@ -862,9 +907,11 @@ const VERSION_META = Object.freeze(
       'settings.nav': 'Recent Sessions',
       'settings.countTitle': 'Sessions collected',
       'settings.countDescription': 'How many sessions Recent lists before 「Show more」, up to {max}.',
+      'settings.stepTitle': 'Rows per expansion',
+      'settings.stepDescription': 'How many more sessions each 「Show more」 click renders, up to {max}.',
       'settings.rowsTitle': 'Height (session rows)',
       'settings.rowsDescription': 'How tall Recent is, measured in session rows; anything beyond scrolls, up to {max} rows.',
-      'settings.invalid': 'Enter 1–{maxCount} for the count and 1–{maxRows} for the height.',
+      'settings.invalid': 'Enter 1–{maxCount} for the default count and expansion step, and 1–{maxRows} for the height.',
       'settings.saved': 'Preference saved',
       'settings.failed': 'Could not save preference',
       'settings.save': 'Save',

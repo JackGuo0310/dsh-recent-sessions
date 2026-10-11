@@ -15,5 +15,10 @@
         # Default number of sessions shown before 「展开更多」. Users change it on
         # the 「最近会话」 settings page; this is the shipped fallback.
         defaultCount: 10
-        # Hard ceiling for the settings input and for the initial render.
+        # Additional rows rendered by every 「展开更多」 click.
+        expandStep: 20
+        # Fixed viewport height, measured in Session rows.
+        visibleRows: 5
+        # Accepted ceilings for the settings form.
         maxCount: 50
+        maxRows: 30
