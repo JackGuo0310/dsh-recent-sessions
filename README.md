@@ -33,20 +33,21 @@
 ## 安装
 
 ```
-dsh plugin --profile <profile> add D:\Github\dsh-sidetalk-latest
+dsh plugin --profile <profile> add github:JackGuo0310/dsh-recent-sessions#v0.2.0
 ```
 
-或在本会话内用 `plugin_manager` 的 `install_bundle`，target 传本目录的绝对路径。
-
-安装后在 DSH 左侧栏工作区下方即可看到「最近」。插件页面标题见 Plugins 列表，图标为 `icon.svg`。
+安装后重启 DSH。左侧栏工作区下方即出现「最近」分组；设置在 设置 →「最近会话」。
 
 ## 开发
 
 ```bash
+npm install            # 只有一个依赖：@deepseek-ai/schemastery
 npm run check          # 语法检查三个 JS 文件
 npm run version:meta   # 重新生成 client.js 里的 Git 版本块
 npm pack               # 打包前自动刷新版本块
 ```
+
+发布新版本：改 `package.json` 版本号 → `npm run version:meta` → 提交 → 打同号 tag → 推送。
 
 ### 版本块为什么内联在 client.js 里
 
