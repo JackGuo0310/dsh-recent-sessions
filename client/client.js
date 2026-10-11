@@ -38,8 +38,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.2.2",
-    "describe": "v0.2.2",
+    "tag": "v0.3.0",
+    "describe": "v0.3.0",
     "commit": null
   }
 );
@@ -58,6 +58,8 @@ const VERSION_META = Object.freeze(
     const FALLBACK_MAX = 50;
     /** Shipped fallback for the accepted height ceiling, mirrored from the `Config`. */
     const FALLBACK_MAX_ROWS = 30;
+    /** Shipped fallback for `desktopNotify`, mirrored from the Host `Config`. */
+    const FALLBACK_NOTIFY = false;
     /** Row metrics, so the height preference can be expressed in rows. */
     const ROW_HEIGHT = 32;
     const ROW_GAP = 2;
@@ -174,6 +176,13 @@ const VERSION_META = Object.freeze(
       '.dshRecentPage_input:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}',
       '.dshRecentPage_input[aria-invalid="true"]{border-color:var(--dsw-alias-state-error-primary)}',
       '.dshRecentPage_input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}',
+      '.dshRecentPage_switch{box-sizing:border-box;position:relative;flex:none;width:40px;height:22px;padding:0;border:none;border-radius:11px;cursor:pointer;background:var(--dsw-alias-bg-layer-3);transition:background .15s var(--ds-ease-in-out)}',
+      '.dshRecentPage_switch[aria-checked="true"]{background:var(--dsw-alias-state-success-primary)}',
+      '.dshRecentPage_switch:disabled{cursor:default;opacity:.5}',
+      '.dshRecentPage_switch::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--dsw-alias-label-primary);transition:transform .15s var(--ds-ease-in-out)}',
+      '.dshRecentPage_switch[aria-checked="true"]::after{transform:translateX(18px)}',
+      '.dshRecentPage_switch:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
+      '@media (prefers-reduced-motion:reduce){.dshRecentPage_switch,.dshRecentPage_switch::after{transition:none}}',
       '.dshRecentPage_error{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-error-primary)}',
       '.dshRecentPage_footer{display:flex;align-items:center;gap:8px;padding-top:16px}',
       '.dshRecentPage_note{flex:1;min-width:0;margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}',
@@ -669,6 +678,11 @@ const VERSION_META = Object.freeze(
       });
       const [notice, setNotice] = useState(null);
       const [busy, setBusy] = useState(false);
+      // Re-read on every render rather than stored: the browser permission can be
+      // revoked from outside the page while it is open.
+      const permission = notificationPermission();
+      const notifyEnabled = preference.value?.desktopNotify === true;
+      const [noticeBusy, setNoticeBusy] = useState(false);
       // Adopt a Host-side change (reset, another window) while not being edited.
       const editing = useRef(false);
 
@@ -714,6 +728,49 @@ const VERSION_META = Object.freeze(
         setBusy(false);
         setNotice(accepted ? 'settings.saved' : 'settings.failed');
         if (accepted) editing.current = false;
+      };
+
+      /**
+       * Flip the desktop-notification switch. Turning it on is the only place a
+       * browser permission may be requested, because that API refuses to answer
+       * outside a user gesture — so the request and the write share this click.
+       * Turning it off only drops the preference; an already-granted permission
+       * is left alone, because the browser is the only party that can revoke it.
+       * @returns {Promise<void>} resolves once the write settles.
+       */
+      const toggleNotify = async () => {
+        if (!writable || isServed('desktopNotify') !== true || noticeBusy) return;
+        const next = notifyEnabled !== true;
+        if (next && permission === 'default') {
+          setNoticeBusy(true);
+          let granted = false;
+          try {
+            granted = await window.Notification.requestPermission() === 'granted';
+          } catch {
+            granted = false;
+          }
+          setNoticeBusy(false);
+          if (granted !== true) {
+            setNotice(permission === 'unsupported'
+              ? 'settings.notifyUnsupported'
+              : 'settings.notifyBlocked');
+            return;
+          }
+        }
+        if (next && permission === 'denied') {
+          setNotice('settings.notifyBlocked');
+          return;
+        }
+        setNoticeBusy(true);
+        const accepted = await saveValues({ desktopNotify: next });
+        setNoticeBusy(false);
+        if (accepted !== true) {
+          setNotice('settings.failed');
+          return;
+        }
+        // A refusal recorded while the browser had no answer yet must not be
+        // silently overwritten by the acknowledgement of the write that followed.
+        setNotice(next ? 'settings.notifyOn' : 'settings.notifyOff');
       };
 
       /**
@@ -804,6 +861,34 @@ const VERSION_META = Object.freeze(
             value: draft.rows,
             bad: invalid.rows,
           }),
+          jsxs('div', { key: 'notifyDivider', className: 'dshRecentPage_divider' }),
+          jsxs('div', { key: 'notify', className: 'dshRecentPage_row', children: [
+            jsx('div', { key: 'text', children: [
+              jsx('div', { key: 'title', className: 'dshRecentPage_title', children: t('settings.notifyTitle') }),
+              jsx('div', {
+                key: 'description',
+                className: 'dshRecentPage_description',
+                children: isServed('desktopNotify') !== true
+                  ? t('settings.fieldPending')
+                  : permission === 'unsupported'
+                    ? t('settings.notifyUnsupported')
+                    : permission === 'denied'
+                      ? t('settings.notifyDenied')
+                      : t('settings.notifyDescription'),
+              }),
+            ] }),
+            jsx('button', {
+              key: 'switch',
+              type: 'button',
+              role: 'switch',
+              'aria-checked': notifyEnabled === true ? 'true' : 'false',
+              'aria-label': t('settings.notifyTitle'),
+              className: 'dshRecentPage_switch',
+              disabled: !writable || noticeBusy || isServed('desktopNotify') !== true
+                || permission === 'unsupported' || (notifyEnabled !== true && permission === 'denied'),
+              onClick: () => { void toggleNotify(); },
+            }),
+          ] }),
           invalid.count || invalid.step || invalid.rows
             ? jsx('p', {
               key: 'invalid',
@@ -830,6 +915,119 @@ const VERSION_META = Object.freeze(
           ] }),
         ],
       });
+    }
+
+    // --------------------------------------------------- desktop notification
+
+    /**
+     * Live browser notification permission.
+     * @returns {string} `granted`, `default`, `denied`, or `unsupported` where
+     *   the browser has no Notification API at all.
+     */
+    function notificationPermission() {
+      if (typeof window === 'undefined' || typeof window.Notification === 'undefined') return 'unsupported';
+      return window.Notification.permission;
+    }
+
+    /**
+     * Raise one Windows desktop toast for a finished background Session.
+     *
+     * The browser — not DSH — owns this surface: Windows renders it in the
+     * bottom-right corner and keeps it in the Action Center after the banner
+     * fades, which is why the page being minimized still notifies. There is no
+     * way to change that geometry from here.
+     * @param {object} args - notification text and the gesture that opens it.
+     */
+    function showDesktopNotification({ title, body, sessionId, openSession }) {
+      try {
+        const notice = new window.Notification(title, {
+          body,
+          // One toast per Session: a Session that is corrected and finishes
+          // again replaces its own banner instead of stacking a second one.
+          tag: `dsh-recent-sessions:${String(sessionId)}`,
+        });
+        notice.onclick = () => {
+          try {
+            window.focus();
+          } catch {
+            // A browser may refuse programmatic focus; opening the Session below
+            // is what actually matters, so a refusal here is not fatal.
+          }
+          try {
+            openSession(sessionId);
+          } finally {
+            notice.close();
+          }
+        };
+      } catch {
+        // A browser may expose the constructor but refuse to display. Losing one
+        // banner is never worth breaking the observer that raised it.
+      }
+    }
+
+    /**
+     * The `shell.overlay` occupant that raises a desktop toast when a background
+     * Session finishes. It renders nothing: the notification belongs to the
+     * operating system, so this seat is only the sanctioned place to obtain the
+     * root-scoped Session status hooks.
+     * @param {object} props - slot props: standard hooks, preference, actions.
+     * @returns {null} always; the toast is the only visible result.
+     */
+    function DesktopNotifier({ useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, t }) {
+      const list = useSessions((state) => state);
+      const statuses = useSessionStatus((state) => state);
+      const workspaces = useWorkspaces((state) => state.items);
+      const enabled = usePreference((state) => state)?.value?.desktopNotify === true;
+
+      /**
+       * Last observed running flag per Session. An edge is what makes this an
+       * event rather than a level: a Session stays `running: false` forever, so
+       * reading the flag alone would re-toast on every later snapshot.
+       */
+      const running = useRef(new Map());
+
+      useEffect(() => {
+        if (enabled !== true || notificationPermission() !== 'granted') {
+          // Drop the edges while disabled so switching on cannot fire a burst of
+          // toasts for Sessions that finished before the switch went live.
+          running.current = new Map();
+          return;
+        }
+
+        const finished = [];
+        for (const [id, status] of statuses) {
+          if (running.current.get(id) === true && status.running === false) finished.push(id);
+        }
+        running.current = new Map([...statuses].map(([id, status]) => [id, status.running]));
+        if (finished.length === 0) return;
+
+        const ownerBySession = new Map();
+        for (const workspace of workspaces ?? []) {
+          for (const id of workspace.sessionIds ?? []) ownerBySession.set(id, workspace);
+        }
+
+        for (const id of finished) {
+          // The main-view Session is the one on screen: the user is already
+          // watching it stop, so a toast for it would only be noise.
+          if ((list.byId?.[id]?.retainedBy?.mainView ?? 0) > 0) continue;
+          const summary = list.byId?.[id];
+          const workspace = ownerBySession.get(id);
+          const label = workspace === undefined
+            ? pathLabel(summary?.cwd)
+            : workspace.title !== '' ? workspace.title : pathLabel(workspace.path);
+          const title = summary?.title != null && summary.title !== ''
+            ? summary.title
+            : t('session.untitled');
+          showDesktopNotification({
+            title,
+            body: label === '' ? t('notify.done') : t('notify.doneIn', { project: label }),
+            sessionId: id,
+            openSession,
+          });
+        }
+      }, [enabled, statuses, list.byId, workspaces, t]);
+
+      return null;
     }
 
     // --------------------------------------------------------------- locales
@@ -870,6 +1068,15 @@ const VERSION_META = Object.freeze(
       'settings.stepDescription': '每次点击「再显示」新增渲染的会话数量，最大 {max} 条。',
       'settings.rowsTitle': '显示高度（会话条数）',
       'settings.rowsDescription': '「最近」占用的高度，按会话条目数计算；超出部分用鼠标滚动查看，最大 {max} 条。',
+      'settings.notifyTitle': '完成提醒（Windows 桌面通知）',
+      'settings.notifyDescription': '后台会话跑完后，在 Windows 右下角弹出系统通知，横幅消失后仍留在通知中心；浏览器最小化也会弹。正在前台的主会话不弹，点通知直接跳回该会话。',
+      'settings.notifyOn': '已开启桌面提醒',
+      'settings.notifyOff': '已关闭桌面提醒',
+      'settings.notifyBlocked': '浏览器拒绝了通知权限。请点击地址栏左侧的站点图标，把「通知」改为「允许」，再回到这里开启。',
+      'settings.notifyDenied': '通知权限已被拒绝。请点击地址栏左侧的站点图标，把「通知」改为「允许」，然后刷新页面。',
+      'settings.notifyUnsupported': '当前浏览器不支持系统通知。',
+      'notify.done': '会话已完成',
+      'notify.doneIn': '「{project}」的会话已完成',
       'settings.invalid': '默认条数和展开步长请输入 1 到 {maxCount} 之间的整数，高度请输入 1 到 {maxRows} 之间的整数。',
       'settings.saved': '设置已保存',
       'settings.failed': '无法保存设置',
@@ -918,6 +1125,15 @@ const VERSION_META = Object.freeze(
       'settings.stepDescription': 'How many more sessions each 「Show more」 click renders, up to {max}.',
       'settings.rowsTitle': 'Height (session rows)',
       'settings.rowsDescription': 'How tall Recent is, measured in session rows; anything beyond scrolls, up to {max} rows.',
+      'settings.notifyTitle': 'Completion notice (Windows desktop notification)',
+      'settings.notifyDescription': 'When a background session finishes, Windows raises a system notification in the bottom-right corner and keeps it in the Action Center after the banner fades; a minimized browser still notifies. The session on screen never does, and clicking the notification opens that session.',
+      'settings.notifyOn': 'Desktop notifications on',
+      'settings.notifyOff': 'Desktop notifications off',
+      'settings.notifyBlocked': 'The browser refused the notification permission. Click the site icon left of the address bar, allow Notifications, then come back and turn this on again.',
+      'settings.notifyDenied': 'Notifications are blocked for this site. Click the site icon left of the address bar, allow Notifications, then reload the page.',
+      'settings.notifyUnsupported': 'This browser has no system notification support.',
+      'notify.done': 'Session finished',
+      'notify.doneIn': 'A session in “{project}” finished',
       'settings.invalid': 'Enter 1–{maxCount} for the default count and expansion step, and 1–{maxRows} for the height.',
       'settings.saved': 'Preference saved',
       'settings.failed': 'Could not save preference',
@@ -1005,6 +1221,18 @@ const VERSION_META = Object.freeze(
           },
         }),
       }, RecentSessionsSettings));
+
+      // The notifier renders nothing, so it is a pure observer. It lives in
+      // `shell.overlay` because that is the sanctioned root-scoped seat holding
+      // the global status hooks, and because a future in-page banner would
+      // already own a place there.
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+        name: 'shell.overlay',
+        id: 'dsh-recent-sessions',
+        order: 90,
+        locale: NS,
+        inject: () => ({ ...hooks(), openSession, t: translate.current }),
+      }, DesktopNotifier));
     }
 
     return { inject, apply };

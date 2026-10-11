@@ -22,3 +22,6 @@
         # Accepted ceilings for the settings form.
         maxCount: 50
         maxRows: 30
+        # Windows desktop toast when a background Session finishes. Default off;
+        # the browser permission is requested from the settings-page gesture.
+        desktopNotify: false

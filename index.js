@@ -37,6 +37,12 @@ export const Config = z.object({
   maxCount: z.number().step(1).min(1).max(200).default(50).volatile(),
   /** Accepted ceiling of `visibleRows`. */
   maxRows: z.number().step(1).min(1).max(100).default(30).volatile(),
+  /**
+   * Desktop notification on a background Session finishing. Off by default: the
+   * browser grants the permission only from a user gesture, so the settings page
+   * asks for it while this switch is being turned on rather than on first load.
+   */
+  desktopNotify: z.boolean().default(false).volatile(),
 });
 
 /**
@@ -56,4 +62,5 @@ export const DEFAULT_CONFIG = Object.freeze({
   visibleRows: 5,
   maxCount: 50,
   maxRows: 30,
+  desktopNotify: false,
 });
