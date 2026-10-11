@@ -38,8 +38,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.1.0",
-    "describe": "v0.1.0",
+    "tag": "v0.1.1",
+    "describe": "v0.1.1",
     "commit": null
   }
 );
