@@ -35,14 +35,15 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState } = require('react');
 
     // dsh:version-meta:begin
-    const VERSION_META = Object.freeze({
-      "repoName": "@jackguo0310/dsh-recent-sessions",
-      "tag": null,
-      "describe": null,
-      "commit": null
-    });
-    // dsh:version-meta:end
-
+const VERSION_META = Object.freeze(
+  {
+    "repoName": "@jackguo0310/dsh-recent-sessions",
+    "tag": "v0.1.0",
+    "describe": "v0.1.0",
+    "commit": null
+  }
+);
+// dsh:version-meta:end
     /** Dictionary namespace owned by this plugin. */
     const NS = 'recentSessions';
     /** Host settings namespace of this plugin's own Loader row. */
@@ -117,7 +118,7 @@ window.__ModuleLoader__.load({
       '.dshRecent_sortMenu{position:absolute;z-index:20;min-width:112px;border-radius:var(--dsw-radius-md);padding:4px;background:var(--dsw-alias-bg-overlay);box-shadow:var(--dsw-elevation-prominent);display:flex;flex-direction:column;gap:2px}',
       '.dshRecent_sortOption{border:none;border-radius:var(--dsw-radius-sm);cursor:pointer;width:100%;padding:5px 8px;color:var(--dsw-alias-label-primary);background:0 0;font:inherit;font-size:12px;line-height:18px;text-align:left;display:flex;align-items:center;gap:6px}',
       '.dshRecent_sortOption:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-      '.dshRecent_list{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px}',
+      '.dshRecent_list{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin-top:4px}',
       '.dshRecent_row{box-sizing:border-box;border-radius:var(--dsw-radius-md);width:100%;height:32px;padding:0 8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary);align-items:center;gap:0;display:flex}',
       '.dshRecent_row:hover,.dshRecent_rowSelected{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
@@ -135,7 +136,7 @@ window.__ModuleLoader__.load({
       '.dshRecent_row:hover .dshRecent_time{display:none}',
       '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
       '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
-      '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;font-size:12px;line-height:18px}',
+      '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;margin-top:4px;font-size:12px;line-height:18px}',
       '.dshRecent_hidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}',
       // Own copy of the shipped state-dot recipe (ui-primitives StateDot.module.css):
       // the spinner and the pending-interaction dot read exactly as in the

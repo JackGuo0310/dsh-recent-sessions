@@ -69,7 +69,14 @@ function resolveRepoName() {
   return 'unknown';
 }
 
-/** Collect every Git fact the settings page displays. */
+/**
+ * Collect every Git fact the settings page displays.
+ *
+ * The short commit is emitted only when HEAD carries no tag: the page shows it
+ * as the untagged fallback, and inside a tagged commit an embedded SHA would be
+ * self-referential — writing it changes the commit, which changes the SHA. The
+ * tag is the identity in that case, so the generated block is a fixed point.
+ */
 function collect() {
   const inRepository = git(['rev-parse', '--is-inside-work-tree']) === 'true';
   const pointed = inRepository ? git(['tag', '--points-at', 'HEAD']) : null;
@@ -78,12 +85,13 @@ function collect() {
     repoName: resolveRepoName(),
     tag,
     describe: inRepository ? git(['describe', '--tags', '--always']) || null : null,
-    commit: inRepository ? git(['rev-parse', '--short=7', 'HEAD']) || null : null,
+    commit: tag === null && inRepository ? git(['rev-parse', '--short=7', 'HEAD']) || null : null,
   };
 }
 
 /**
- * Render the generated region.
+ * Render the generated region, trailing newline included so the committed
+ * slice and a freshly rendered region compare equal byte for byte.
  * @param {object} facts - collected Git facts.
  * @returns {string} region text, sentinels included.
  */
@@ -94,6 +102,7 @@ function render(facts) {
     JSON.stringify(facts, null, 2).split('\n').map((line) => `  ${line}`).join('\n'),
     ');',
     `${END}`,
+    '',
   ].join('\n');
 }
 
