@@ -103,10 +103,10 @@ window.__ModuleLoader__.load({
      * collide with a shipped module; only `--dsw-*` theme tokens are shared.
      */
     const CSS = [
-      '.dshRecent_section{box-sizing:border-box;width:100%;padding:2px 0 6px;color:var(--dsw-alias-label-primary)}',
-      '.dshRecent_header{position:relative;display:flex;align-items:center;gap:4px;width:100%}',
-      '.dshRecent_toggle{border:none;border-radius:var(--dsw-radius-md);height:28px;min-width:0;padding:0 4px;cursor:pointer;background:0 0;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;flex:1 1 auto;align-items:center;gap:4px;display:flex}',
-      '.dshRecent_toggle:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_section{box-sizing:border-box;width:100%;margin-top:6px;padding:6px 0;border-top:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}',
+      '.dshRecent_header{position:relative;display:flex;align-items:center;gap:2px;width:100%;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover-solid);padding:0 4px}',
+      '.dshRecent_toggle{border:none;border-radius:var(--dsw-radius-sm);height:28px;min-width:0;padding:0 4px;cursor:pointer;background:0 0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;flex:1 1 auto;align-items:center;gap:4px;display:flex}',
+      '.dshRecent_toggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
       '.dshRecent_toggle:focus-visible,.dshRecent_sortButton:focus-visible,.dshRecent_moreButton:focus-visible,.dshRecent_row:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}',
       '.dshRecent_headerLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;line-height:20px;overflow:hidden;text-align:left}',
       '.dshRecent_count{flex:none;font-size:10px;line-height:16px;opacity:.8}',
