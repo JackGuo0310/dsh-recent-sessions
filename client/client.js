@@ -51,8 +51,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.0",
-    "describe": "v0.5.0",
+    "tag": "v0.5.1",
+    "describe": "v0.5.1",
     "commit": null
   }
 );
@@ -145,25 +145,40 @@ const VERSION_META = Object.freeze(
       '.dshRecent_slot{width:16px;height:20px;color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;justify-content:center;display:inline-flex}',
       '.dshRecent_title{text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;margin:0 6px 0 4px;font-size:14px;line-height:20px;overflow:hidden}',
       '.dshRecent_time{flex:none;font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
-      // The pin occupies the trailing cell: a pinned row shows it at rest, a
-      // hovered row offers the toggle, and the time yields exactly as it does in
-      // the workspace rows. It is a real button, so pinning works from here.
-      '.dshRecent_pin{border:none;background:0 0;padding:0;cursor:pointer;width:16px;height:20px;flex:none;color:var(--dsw-alias-label-tertiary);align-items:center;justify-content:center;display:none}',
+      // The pin occupies the trailing cell: a pinned row shows it at rest, a hovered
+      // row offers the toggle, and the time yields exactly as it does in the
+      // workspace rows. It is a real button, so pinning works from here. Kept
+      // mounted and merely dimmed for the same reason as the menu strip below —
+      // display-toggling it would collapse the row while a portaled popup is up.
+      '.dshRecent_pin{border:none;background:0 0;padding:0;cursor:pointer;width:16px;height:20px;flex:none;color:var(--dsw-alias-label-tertiary);opacity:0;align-items:center;justify-content:center;transition:opacity .12s var(--ds-ease-in-out);display:inline-flex}',
       '.dshRecent_pin svg{width:14px;height:14px;fill:currentColor}',
-      '.dshRecent_pin[data-pinned="true"]{display:inline-flex;color:var(--dsw-alias-label-caption)}',
       '.dshRecent_pin:hover{color:var(--dsw-alias-label-primary)}',
       '.dshRecent_pin:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px;border-radius:var(--dsw-radius-xs)}',
-      '.dshRecent_row:hover .dshRecent_pin{display:inline-flex}',
-      '.dshRecent_row:hover .dshRecent_time{display:none}',
-      // The row-action strip. Occupies no width at rest and appears with the
-      // row, matching the workspace rows' trailing affordance; the time yields
-      // rather than sharing the cell, exactly as the pin button does.
-      '.dshRecent_menu{display:none;flex:none;align-items:center;justify-content:center;padding:0 2px}',
-      '.dshRecent_row:hover .dshRecent_menu{display:inline-flex}',
-      '.dshRecent_menuButton{border:none;border-radius:var(--dsw-radius-sm);width:20px;height:20px;padding:0;cursor:pointer;color:var(--dsw-alias-label-tertiary);background:0 0;align-items:center;justify-content:center;display:inline-flex}',
-      '.dshRecent_menuButton:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
-      '.dshRecent_menuButton[aria-expanded="true"]{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+      // A pinned row keeps a dimmed glyph even unhovered, so pinning reads at rest
+      // without the row carrying a permanent full-strength glyph.
+      '.dshRecent_pin[data-pinned="true"]{color:var(--dsw-alias-label-caption);opacity:.65}',
+      '.dshRecent_row:hover .dshRecent_pin,.dshRecent_row:focus-within .dshRecent_pin{opacity:1}',
+      '.dshRecent_row:hover .dshRecent_pin[data-pinned="true"],.dshRecent_row:focus-within .dshRecent_pin[data-pinned="true"]{opacity:1}',
+      // The time yields the trailing cell to the affordances on hover. Displayed, not
+      // faded: the strips are opacity-toggled so they keep their width, and the
+      // time has to actually leave for them to be reachable.
+      '.dshRecent_row:hover .dshRecent_time,.dshRecent_row:focus-within .dshRecent_time{display:none}',
+      // The row-action strip. NOT `display: none` at rest, and that is the whole
+      // point: the menu portals to document.body, so the moment the pointer
+      // enters the popup the row's :hover ends, and a strip that vanished with
+      // it would take the popup's own anchor away underneath. The shipped
+      // workspace rows keep `.rowActions` mounted for exactly this reason; these
+      // only dim the affordances instead of hiding them.
+      '.dshRecent_menu{display:flex;flex:none;height:20px;padding:0 2px;opacity:0;align-items:center;justify-content:center;transition:opacity .12s var(--ds-ease-in-out)}',
+      '.dshRecent_row:hover .dshRecent_menu,.dshRecent_row:focus-within .dshRecent_menu{opacity:1}',
+      // Focus-within also covers keyboard use, where there is no pointer hover at
+      // all and a display toggle would make the button unreachable.
+      '.dshRecent_row:hover .dshRecent_menuButton,.dshRecent_row:focus-within .dshRecent_menuButton{color:var(--dsw-alias-label-secondary)}',
+      '.dshRecent_menuButton{border:none;border-radius:var(--dsw-radius-xs);width:16px;height:16px;padding:0;cursor:pointer;color:var(--dsw-alias-label-tertiary);background:0 0;flex:none;align-items:center;justify-content:center;display:inline-flex}',
+      '.dshRecent_menuButton:hover{color:var(--dsw-alias-label-primary)}',
+      '.dshRecent_menuButton[aria-expanded="true"]{color:var(--dsw-alias-label-primary)}',
       '.dshRecent_menuButton:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}',
+      '@media (prefers-reduced-motion:reduce){.dshRecent_menu,.dshRecent_pin{transition:none}}',
       '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
       '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
       '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;margin-top:4px;font-size:12px;line-height:18px}',

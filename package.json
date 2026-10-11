@@ -1,6 +1,6 @@
 {
   "name": "@jackguo0310/dsh-recent-sessions",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "在 DSH 侧边栏工作区下方增加可折叠的「最近」会话分组，跨项目汇总近期会话，支持重命名/分叉/归档；会话跑完后可发 Windows 桌面通知。",
   "type": "module",
   "exports": {

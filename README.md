@@ -25,6 +25,8 @@
 
 前两项的快捷键提示直接读 DSH 的快捷键目录，用户改了绑定这里也跟着变。
 
+行尾的「⋯」按钮和图钉按钮**常驻 DOM、只在未悬停时降低不透明度**，不用 `display: none`。原因很实际：菜单是 portal 到 `document.body` 的，指针一移进弹层就会离开这一行，`:hover` 随之失效 —— 如果那时把按钮 `display: none` 掉，`Menu` 的锚点就没了，菜单当场自毁，根本来不及点。工作区那套 `.rowActions` 也是常驻的，正是同一个道理。附带好处是纯键盘 Tab 到行内按钮时 `:focus-within` 也能点亮它。
+
 ## 「最近」自己的置顶
 
 「最近」的置顶是**这个分组自己的排序偏好**：它只让会话在「最近」里排到最前，**不写入 Harness 的置顶账本**，因此不改变该会话在所属工作区里的顺序或置顶标记。
@@ -58,7 +60,7 @@
 ## 安装
 
 ```
-dsh plugin --profile <profile> add github:JackGuo0310/dsh-recent-sessions#v0.5.0
+dsh plugin --profile <profile> add github:JackGuo0310/dsh-recent-sessions#v0.5.1
 ```
 
 安装后重启 DSH。左侧栏工作区下方即出现「最近」分组；设置在 设置 →「最近会话」。
