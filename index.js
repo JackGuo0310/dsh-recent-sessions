@@ -8,9 +8,9 @@
  * `/plugins/<id>/client.js` for packages that appear as active Loader entries and
  * declare `dsh.client`.
  *
- * The tunable `defaultCount` lives in this row's `config` rather than in plugin
- * state, so a user's value survives a bundle upgrade: the profile's own patch
- * layer keeps the override while this shipped default moves.
+ * The tunable preferences live in this row's `config` rather than in plugin
+ * state, so a user's values survive a bundle upgrade: the profile's own patch
+ * layer keeps the overrides while these shipped defaults move.
  *
  * `.volatile()` marks each field as the live, settings-backed kind, which is what
  * makes the Host project this row into the settings surface the Client's
@@ -25,10 +25,16 @@ export const name = 'dsh-recent-sessions';
 /** No host services are required. */
 export const inject = [];
 
-/** Shipped defaults and the accepted range of the one user preference. */
+/** Shipped defaults and the accepted range of the user preferences. */
 export const Config = z.object({
+  /** Rows shown before 「展开更多」. */
   defaultCount: z.number().step(1).min(1).max(50).default(10).volatile(),
+  /** Height of the list expressed in session rows; beyond it the list scrolls. */
+  visibleRows: z.number().step(1).min(1).max(30).default(5).volatile(),
+  /** Accepted ceiling of `defaultCount`. */
   maxCount: z.number().step(1).min(1).max(200).default(50).volatile(),
+  /** Accepted ceiling of `visibleRows`. */
+  maxRows: z.number().step(1).min(1).max(100).default(30).volatile(),
 });
 
 /**
@@ -42,4 +48,9 @@ export const Config = z.object({
 export function apply(_ctx) {}
 
 /** Shipped defaults mirrored for the browser half's offline fallback. */
-export const DEFAULT_CONFIG = Object.freeze({ defaultCount: 10, maxCount: 50 });
+export const DEFAULT_CONFIG = Object.freeze({
+  defaultCount: 10,
+  visibleRows: 5,
+  maxCount: 50,
+  maxRows: 30,
+});

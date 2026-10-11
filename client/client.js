@@ -49,8 +49,23 @@ window.__ModuleLoader__.load({
     const HOST_NAMESPACE = 'dsh-recent-sessions';
     /** Shipped fallback for `defaultCount`, mirrored from the Host `Config`. */
     const FALLBACK_COUNT = 10;
-    /** Shipped fallback for the accepted ceiling, mirrored from the Host `Config`. */
+    /** Shipped fallback for `visibleRows`, mirrored from the Host `Config`. */
+    const FALLBACK_ROWS = 5;
+    /** Shipped fallback for the accepted count ceiling, mirrored from the `Config`. */
     const FALLBACK_MAX = 50;
+    /** Shipped fallback for the accepted height ceiling, mirrored from the `Config`. */
+    const FALLBACK_MAX_ROWS = 30;
+    /** Row metrics, so the height preference can be expressed in rows. */
+    const ROW_HEIGHT = 32;
+    const ROW_GAP = 2;
+    /**
+     * Where 「最近」 keeps its own pin set. Deliberately NOT the Host's pin set:
+     * pinning here is this section's ordering preference and must not reorder or
+     * mark the Session inside the workspace that owns it. Browser-local storage
+     * is enough for a display preference and keeps the harness pin ledger
+     * untouched.
+     */
+    const PIN_STORAGE_KEY = 'dsh-recent-sessions:pins';
     /** Sort strategies offered by the header. One entry for now, by design. */
     const SORT_OPTIONS = [{ id: 'updated', labelKey: 'sort.updated' }];
     /**
@@ -266,6 +281,33 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------------------ rows
 
     /**
+     * Read the section's own pin set.
+     * @returns {Set<string>} pinned Session ids.
+     */
+    function readLocalPins() {
+      try {
+        const raw = window.localStorage.getItem(PIN_STORAGE_KEY);
+        if (raw === null) return new Set();
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? new Set(parsed.filter((id) => typeof id === 'string')) : new Set();
+      } catch {
+        return new Set();
+      }
+    }
+
+    /**
+     * Persist the section's own pin set.
+     * @param {Set<string>} pins - pinned Session ids.
+     */
+    function writeLocalPins(pins) {
+      try {
+        window.localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify([...pins]));
+      } catch {
+        // A blocked storage backend only costs durability, never the interaction.
+      }
+    }
+
+    /**
      * Leading state cell: a spinner while running, otherwise the state dot, plus
      * one screen-reader label per status — the shipped row's arrangement.
      * @param {object} props - ordered statuses.
@@ -401,23 +443,23 @@ window.__ModuleLoader__.load({
      * @param {object} props - slot props: owner share, standard hooks, injected actions.
      * @returns {object | null} the section element, or null in the collapsed rail.
      */
-    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, togglePin, t }) {
+    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, t }) {
       const [expanded, setExpanded] = useState(true);
       const [showAll, setShowAll] = useState(false);
       const [sort, setSort] = useState('updated');
       const [sortOpen, setSortOpen] = useState(false);
-      const [pinError, setPinError] = useState(null);
+      const [pins, setPins] = useState(readLocalPins);
       const sortAnchor = useRef(null);
 
       const list = useSessions((state) => state);
       const statuses = useSessionStatus((state) => state);
       const workspaces = useWorkspaces((state) => state.items);
       const archived = useWorkspaces((state) => state.archivedSessionIds);
-      const pinned = useWorkspaces((state) => state.pinnedSessionIds);
       const preference = usePreference((state) => state);
 
       const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
       const defaultCount = Math.min(readNumber(preference, 'defaultCount', FALLBACK_COUNT), maxCount);
+      const visibleRows = readNumber(preference, 'visibleRows', FALLBACK_ROWS);
 
       // The selected Session is the one the main view retains — the same signal
       // ui-workspace uses for its active-workspace tint.
@@ -430,7 +472,6 @@ window.__ModuleLoader__.load({
       // provisional-blank and subagent sessions are not user-facing rows here.
       const rows = useMemo(() => {
         const archivedSet = new Set(archived ?? []);
-        const pinnedSet = new Set(pinned ?? []);
         const ownerBySession = new Map();
         for (const workspace of workspaces ?? []) {
           for (const id of workspace.sessionIds ?? []) ownerBySession.set(id, workspace);
@@ -451,14 +492,16 @@ window.__ModuleLoader__.load({
             title: summary.title ?? '',
             updatedAt: summary.updatedAt,
             workspaceLabel: label,
-            pinned: pinnedSet.has(id),
+            pinned: pins.has(id),
           });
         }
-        // Recency, with the Session identity as the deterministic tie-break.
-        collected.sort((left, right) => right.updatedAt - left.updatedAt
+        // Pinned rows lead, then recency, with the Session identity as the
+        // deterministic tie-break. Pinning only reorders this section.
+        collected.sort((left, right) => Number(right.pinned) - Number(left.pinned)
+          || right.updatedAt - left.updatedAt
           || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
         return collected;
-      }, [archived, list, workspaces]);
+      }, [archived, list, pins, workspaces]);
 
       const onOpen = useCallback((id) => {
         setShowAll(false);
@@ -466,11 +509,14 @@ window.__ModuleLoader__.load({
       }, [openSession]);
 
       const onTogglePin = useCallback((id, isPinned) => {
-        setPinError(null);
-        togglePin(id, isPinned).then((accepted) => {
-          if (accepted !== true) setPinError('pin.failed');
+        setPins((current) => {
+          const next = new Set(current);
+          if (isPinned) next.delete(id);
+          else next.add(id);
+          writeLocalPins(next);
+          return next;
         });
-      }, [togglePin]);
+      }, []);
 
       // The rail (56px icons) has no room for rows, and the shipped shell hides
       // this whole foot area there anyway.
@@ -478,6 +524,9 @@ window.__ModuleLoader__.load({
 
       const visible = showAll ? rows : rows.slice(0, defaultCount);
       const hidden = Math.max(0, rows.length - defaultCount);
+      // The height preference is expressed in rows, so the list occupies a fixed
+      // multiple of the row pitch and scrolls past that.
+      const listStyle = { maxHeight: `${visibleRows * ROW_HEIGHT + Math.max(0, visibleRows - 1) * ROW_GAP}px` };
       const sortLabel = SORT_OPTIONS.find((option) => option.id === sort)?.labelKey ?? SORT_OPTIONS[0].labelKey;
 
       const head = jsxs('div', { key: 'head', className: 'dshRecent_header', children: [
@@ -527,7 +576,7 @@ window.__ModuleLoader__.load({
             key: 'list',
             className: 'dshRecent_list',
             role: 'list',
-            style: showAll ? { maxHeight: '40vh' } : undefined,
+            style: listStyle,
             children: visible.map((row) => jsx(RecentRow, {
               key: row.id,
               row,
@@ -546,12 +595,6 @@ window.__ModuleLoader__.load({
           onClick: () => setShowAll((value) => !value),
           children: showAll ? t('more.collapse') : t('more.expand', { n: hidden }),
         }) : null,
-        pinError === null ? null : jsx('div', {
-          key: 'pinError',
-          className: 'dshRecent_empty',
-          role: 'alert',
-          children: t(pinError),
-        }),
       ] });
 
       return jsx('div', {
@@ -576,29 +619,43 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The 「最近会话」 settings page: repository identity plus the one
-     * user-editable preference.
+     * The 「最近会话」 settings page: repository identity plus the two
+     * user-editable preferences.
      * @param {object} props - locale seat, preference hook and writer.
      * @returns {object} the page element.
      */
-    function RecentSessionsSettings({ usePreference, saveCount, t }) {
+    function RecentSessionsSettings({ usePreference, saveValues, t }) {
       const preference = usePreference((state) => state);
-      const stored = readNumber(preference, 'defaultCount', FALLBACK_COUNT);
+      const stored = {
+        defaultCount: readNumber(preference, 'defaultCount', FALLBACK_COUNT),
+        visibleRows: readNumber(preference, 'visibleRows', FALLBACK_ROWS),
+      };
       const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
+      const maxRows = readNumber(preference, 'maxRows', FALLBACK_MAX_ROWS);
       const writable = preference.status === 'ready' && preference.writable;
-      const [draft, setDraft] = useState(String(stored));
+      // A field absent from the served form is one the running Host does not know
+      // yet, so it is shown as unavailable rather than silently ignored.
+      const served = preference.value ?? {};
+      const isServed = (field) => Object.hasOwn(served, field);
+      const [draft, setDraft] = useState({ count: String(stored.defaultCount), rows: String(stored.visibleRows) });
       const [notice, setNotice] = useState(null);
       const [busy, setBusy] = useState(false);
       // Adopt a Host-side change (reset, another window) while not being edited.
       const editing = useRef(false);
 
       useEffect(() => {
-        if (editing.current !== true) setDraft(String(stored));
-      }, [stored]);
+        if (editing.current !== true) {
+          setDraft({ count: String(stored.defaultCount), rows: String(stored.visibleRows) });
+        }
+      }, [stored.defaultCount, stored.visibleRows]);
 
-      const parsed = Number.parseInt(draft, 10);
-      const invalid = !Number.isInteger(parsed) || parsed < 1 || parsed > maxCount;
-      const dirty = invalid === false && parsed !== stored;
+      const parsed = { count: Number.parseInt(draft.count, 10), rows: Number.parseInt(draft.rows, 10) };
+      const invalid = {
+        count: !Number.isInteger(parsed.count) || parsed.count < 1 || parsed.count > maxCount,
+        rows: !Number.isInteger(parsed.rows) || parsed.rows < 1 || parsed.rows > maxRows,
+      };
+      const dirty = (invalid.count === false && parsed.count !== stored.defaultCount)
+        || (invalid.rows === false && parsed.rows !== stored.visibleRows);
       const meta = VERSION_META ?? {};
       const version = versionText({
         tag: meta.tag ?? '',
@@ -607,14 +664,57 @@ window.__ModuleLoader__.load({
       }, t);
 
       const submit = async () => {
-        if (invalid || dirty === false || busy) return;
+        if (invalid.count || invalid.rows || dirty === false || busy) return;
         setBusy(true);
         setNotice(null);
-        const accepted = await saveCount(parsed);
+        const accepted = await saveValues({ defaultCount: parsed.count, visibleRows: parsed.rows });
         setBusy(false);
         setNotice(accepted ? 'settings.saved' : 'settings.failed');
         if (accepted) editing.current = false;
       };
+
+      /**
+       * One labeled numeric preference row.
+       * @param {object} row - row identity, bounds and change handler.
+       * @returns {object} the row element.
+       */
+      const numberRow = ({ field, draftKey, titleKey, descriptionKey, max, value, bad }) => jsxs('div', {
+        key: field,
+        className: 'dshRecentPage_row',
+        children: [
+          jsx('div', { key: 'text', children: [
+            jsx('div', { key: 'title', className: 'dshRecentPage_title', children: t(titleKey) }),
+            jsx('div', {
+              key: 'description',
+              className: 'dshRecentPage_description',
+              children: isServed(field) ? t(descriptionKey, { max }) : t('settings.fieldPending'),
+            }),
+          ] }),
+          jsx('input', {
+            key: 'input',
+            className: 'dshRecentPage_input',
+            type: 'number',
+            inputMode: 'numeric',
+            min: 1,
+            max,
+            step: 1,
+            value,
+            disabled: !writable || busy || !isServed(field),
+            'aria-invalid': bad ? 'true' : undefined,
+            'aria-label': t(titleKey),
+            onFocus: () => { editing.current = true; },
+            onChange: (event) => {
+              setDraft((current) => ({ ...current, [draftKey]: event.target.value }));
+              setNotice(null);
+            },
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              void submit();
+            },
+          }),
+        ],
+      });
 
       return jsx('div', {
         className: 'dshRecentPage_section',
@@ -634,36 +734,32 @@ window.__ModuleLoader__.load({
             className: 'dshRecentPage_note',
             children: t('settings.unavailable'),
           }),
-          jsxs('div', { key: 'row', className: 'dshRecentPage_row', children: [
-            jsx('div', { key: 'text', children: [
-              jsx('div', { key: 'title', className: 'dshRecentPage_title', children: t('settings.countTitle') }),
-              jsx('div', { key: 'description', className: 'dshRecentPage_description', children: t('settings.countDescription', { max: maxCount }) }),
-            ] }),
-            jsx('input', {
-              key: 'input',
-              className: 'dshRecentPage_input',
-              type: 'number',
-              inputMode: 'numeric',
-              min: 1,
-              max: maxCount,
-              step: 1,
-              value: draft,
-              disabled: !writable || busy,
-              'aria-invalid': invalid ? 'true' : undefined,
-              'aria-label': t('settings.countTitle'),
-              onFocus: () => { editing.current = true; },
-              onChange: (event) => {
-                setDraft(event.target.value);
-                setNotice(null);
-              },
-              onKeyDown: (event) => {
-                if (event.key !== 'Enter') return;
-                event.preventDefault();
-                void submit();
-              },
-            }),
-          ] }),
-          invalid ? jsx('p', { key: 'invalid', className: 'dshRecentPage_error', role: 'alert', children: t('settings.invalid', { max: maxCount }) }) : null,
+          numberRow({
+            field: 'defaultCount',
+            draftKey: 'count',
+            titleKey: 'settings.countTitle',
+            descriptionKey: 'settings.countDescription',
+            max: maxCount,
+            value: draft.count,
+            bad: invalid.count,
+          }),
+          numberRow({
+            field: 'visibleRows',
+            draftKey: 'rows',
+            titleKey: 'settings.rowsTitle',
+            descriptionKey: 'settings.rowsDescription',
+            max: maxRows,
+            value: draft.rows,
+            bad: invalid.rows,
+          }),
+          invalid.count || invalid.rows
+            ? jsx('p', {
+              key: 'invalid',
+              className: 'dshRecentPage_error',
+              role: 'alert',
+              children: t('settings.invalid', { maxCount, maxRows }),
+            })
+            : null,
           jsxs('div', { key: 'footer', className: 'dshRecentPage_footer', children: [
             jsx('p', {
               key: 'note',
@@ -675,7 +771,7 @@ window.__ModuleLoader__.load({
               key: 'save',
               type: 'button',
               className: 'dshRecentPage_save',
-              disabled: !writable || busy || invalid || dirty === false,
+              disabled: !writable || busy || invalid.count || invalid.rows || dirty === false,
               onClick: () => { void submit(); },
               children: t('settings.save'),
             }),
@@ -697,9 +793,8 @@ window.__ModuleLoader__.load({
       'more.collapse': '收起',
       'session.untitled': '未命名',
       'row.pinned': '已置顶',
-      'pin.add': '置顶会话',
-      'pin.remove': '取消置顶',
-      'pin.failed': '置顶操作失败，请重试。',
+      'pin.add': '在「最近」中置顶',
+      'pin.remove': '取消「最近」置顶',
       'row.project': '所属项目：{name}',
       'time.now': '刚刚',
       'time.minutes': '{n}分钟',
@@ -718,12 +813,15 @@ window.__ModuleLoader__.load({
       'status.compact.answer': '待回答',
       'settings.nav': '最近会话',
       'settings.countTitle': '默认显示条数',
-      'settings.countDescription': '「最近」在点击「展开更多」前显示的会话数量，最大 {max} 条。',
-      'settings.invalid': '请输入 1 到 {max} 之间的整数。',
+      'settings.countDescription': '「最近」在点击「展开更多」前收录的会话数量，最大 {max} 条。',
+      'settings.rowsTitle': '显示高度（会话条数）',
+      'settings.rowsDescription': '「最近」占用的高度，按会话条目数计算；超出部分用鼠标滚动查看，最大 {max} 条。',
+      'settings.invalid': '条数请输入 1 到 {maxCount} 之间的整数，高度请输入 1 到 {maxRows} 之间的整数。',
       'settings.saved': '设置已保存',
       'settings.failed': '无法保存设置',
       'settings.save': '保存',
-      'settings.unavailable': '宿主尚未提供本插件的配置，暂时无法修改；「最近」仍按默认 10 条显示。',
+      'settings.unavailable': '宿主尚未提供本插件的配置，暂时无法修改；「最近」仍按默认值显示。',
+      'settings.fieldPending': '宿主尚未加载本项配置，重启 DSH 后可用。',
       'version.untagged': '未打标签（{ref}）',
       'version.noTag': '未打标签（{commit}）',
       'version.unknown': '未知版本',
@@ -740,10 +838,9 @@ window.__ModuleLoader__.load({
       'more.expand': 'Show {n} more sessions',
       'more.collapse': 'Show less',
       'session.untitled': 'Untitled',
-      'row.pinned': 'Pinned',
-      'pin.add': 'Pin session',
-      'pin.remove': 'Unpin session',
-      'pin.failed': 'Could not change the pin. Try again.',
+      'row.pinned': 'Pinned in Recent',
+      'pin.add': 'Pin in Recent',
+      'pin.remove': 'Unpin in Recent',
       'row.project': 'Project: {name}',
       'time.now': 'now',
       'time.minutes': '{n}min',
@@ -761,13 +858,16 @@ window.__ModuleLoader__.load({
       'status.compact.planReview': 'Plan review',
       'status.compact.answer': 'Answer',
       'settings.nav': 'Recent Sessions',
-      'settings.countTitle': 'Default number of sessions shown',
-      'settings.countDescription': 'How many sessions Recent shows before 「Show more」, up to {max}.',
-      'settings.invalid': 'Enter a whole number between 1 and {max}.',
+      'settings.countTitle': 'Sessions collected',
+      'settings.countDescription': 'How many sessions Recent lists before 「Show more」, up to {max}.',
+      'settings.rowsTitle': 'Height (session rows)',
+      'settings.rowsDescription': 'How tall Recent is, measured in session rows; anything beyond scrolls, up to {max} rows.',
+      'settings.invalid': 'Enter 1–{maxCount} for the count and 1–{maxRows} for the height.',
       'settings.saved': 'Preference saved',
       'settings.failed': 'Could not save preference',
       'settings.save': 'Save',
-      'settings.unavailable': 'The Host is not serving this plugin\'s configuration yet, so it cannot be changed. Recent still shows the default 10.',
+      'settings.unavailable': 'The Host is not serving this plugin\'s configuration yet, so it cannot be changed. Recent uses the defaults.',
+      'settings.fieldPending': 'The Host has not loaded this field yet; restart DSH to enable it.',
       'version.untagged': 'Untagged ({ref})',
       'version.noTag': 'Untagged ({commit})',
       'version.unknown': 'Unknown version',
@@ -808,26 +908,13 @@ window.__ModuleLoader__.load({
         uiWorkspace?.openSession(sessionId);
       };
 
-      // Pin state is Host-authoritative: this only issues the write and reports
-      // whether it was accepted; the pin set arrives back through `useWorkspaces`.
-      const workspaces = ctx.get('workspaces');
-      const togglePin = async (sessionId, isPinned) => {
-        if (workspaces === undefined) return false;
-        try {
-          await (isPinned ? workspaces.unpinSession(sessionId) : workspaces.pinSession(sessionId));
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
         id: 'dsh-recent-sessions',
         order: 10,
         label: () => translate.current('section.label'),
         locale: NS,
-        inject: () => ({ ...hooks(), openSession, togglePin, t: translate.current }),
+        inject: () => ({ ...hooks(), openSession, t: translate.current }),
       }, RecentSessionsSection));
 
       // Registered unconditionally: the navigation row is a projection of this
@@ -843,9 +930,19 @@ window.__ModuleLoader__.load({
         inject: () => ({
           ...hooks(),
           t: translate.current,
-          saveCount: async (value) => {
+          saveValues: async (values) => {
             try {
-              return await form.set('defaultCount', value);
+              // The served form is the authority on which fields the Host can
+              // still accept: a field the running Host does not know yet (a
+              // reload pending) is skipped instead of failing the whole save.
+              const served = form.getSnapshot().value ?? {};
+              let accepted = true;
+              for (const [field, value] of Object.entries(values)) {
+                if (!Object.hasOwn(served, field)) continue;
+                accepted = await form.set(field, value);
+                if (accepted !== true) break;
+              }
+              return accepted;
             } catch {
               return false;
             }
