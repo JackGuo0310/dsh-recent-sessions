@@ -38,8 +38,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.4.1",
-    "describe": "v0.4.1",
+    "tag": "v0.4.2",
+    "describe": "v0.4.2",
     "commit": null
   }
 );
@@ -977,6 +977,7 @@ const VERSION_META = Object.freeze(
       const list = useSessions((state) => state);
       const statuses = useSessionStatus((state) => state);
       const workspaces = useWorkspaces((state) => state.items);
+      const archivedSessionIds = useWorkspaces((state) => state.archivedSessionIds);
       const enabled = usePreference((state) => state)?.value?.desktopNotify === true;
 
       /**
@@ -1005,12 +1006,20 @@ const VERSION_META = Object.freeze(
         for (const workspace of workspaces ?? []) {
           for (const id of workspace.sessionIds ?? []) ownerBySession.set(id, workspace);
         }
+        const archived = new Set(archivedSessionIds ?? []);
 
         for (const id of finished) {
+          const summary = list.byId?.[id];
+          // Same user-facing filter the sidebar rows apply. A subagent finishing
+          // is its parent's business, not a separate notification — and opening
+          // one by id would land the user inside a child conversation. An archived
+          // Session is not openable either, so its toast would only dead-end.
+          if (summary === undefined) continue;
+          if (summary.origin === 'subagent' || summary.blank === true) continue;
+          if (archived.has(id)) continue;
           // The main-view Session is the one on screen: the user is already
           // watching it stop, so a toast for it would only be noise.
-          if ((list.byId?.[id]?.retainedBy?.mainView ?? 0) > 0) continue;
-          const summary = list.byId?.[id];
+          if ((summary.retainedBy?.mainView ?? 0) > 0) continue;
           const workspace = ownerBySession.get(id);
           const label = workspace === undefined
             ? pathLabel(summary?.cwd)
@@ -1025,7 +1034,7 @@ const VERSION_META = Object.freeze(
             openSession,
           });
         }
-      }, [enabled, statuses, list.byId, workspaces, t]);
+      }, [enabled, statuses, list.byId, workspaces, archivedSessionIds, t]);
 
       return null;
     }
@@ -1069,7 +1078,7 @@ const VERSION_META = Object.freeze(
       'settings.rowsTitle': '显示高度（会话条数）',
       'settings.rowsDescription': '「最近」占用的高度，按会话条目数计算；超出部分用鼠标滚动查看，最大 {max} 条。',
       'settings.notifyTitle': '完成提醒（Windows 桌面通知）',
-      'settings.notifyDescription': '后台会话跑完后，在 Windows 右下角弹出系统通知，横幅消失后仍留在通知中心；浏览器最小化也会弹。正在前台的主会话不弹，点通知直接跳回该会话。',
+      'settings.notifyDescription': '后台会话跑完后，在 Windows 右下角弹出系统通知，横幅消失后仍留在通知中心；浏览器最小化也会弹。正在前台的主会话不弹，子智能体、空白和已归档会话也不弹，点通知直接跳回该会话。',
       'settings.notifyOn': '已开启桌面提醒',
       'settings.notifyOff': '已关闭桌面提醒',
       'settings.notifyBlocked': '浏览器拒绝了通知权限。请点击地址栏左侧的站点图标，把「通知」改为「允许」，再回到这里开启。',
@@ -1126,7 +1135,7 @@ const VERSION_META = Object.freeze(
       'settings.rowsTitle': 'Height (session rows)',
       'settings.rowsDescription': 'How tall Recent is, measured in session rows; anything beyond scrolls, up to {max} rows.',
       'settings.notifyTitle': 'Completion notice (Windows desktop notification)',
-      'settings.notifyDescription': 'When a background session finishes, Windows raises a system notification in the bottom-right corner and keeps it in the Action Center after the banner fades; a minimized browser still notifies. The session on screen never does, and clicking the notification opens that session.',
+      'settings.notifyDescription': 'When a background session finishes, Windows raises a system notification in the bottom-right corner and keeps it in the Action Center after the banner fades; a minimized browser still notifies. The session on screen never does, nor do subagent, blank and archived sessions; clicking the notification opens that session.',
       'settings.notifyOn': 'Desktop notifications on',
       'settings.notifyOff': 'Desktop notifications off',
       'settings.notifyBlocked': 'The browser refused the notification permission. Click the site icon left of the address bar, allow Notifications, then come back and turn this on again.',
