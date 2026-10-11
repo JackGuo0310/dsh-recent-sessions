@@ -535,6 +535,7 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'dshRecent_toggle',
           'aria-expanded': expanded,
+          onClick: () => setExpanded((value) => !value),
           children: [
             jsx('span', {
               key: 'arrow',
