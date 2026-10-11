@@ -103,7 +103,7 @@ window.__ModuleLoader__.load({
      * collide with a shipped module; only `--dsw-*` theme tokens are shared.
      */
     const CSS = [
-      '.dshRecent_section{box-sizing:border-box;width:100%;margin-top:6px;padding:6px 0;border-top:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}',
+      '.dshRecent_section{box-sizing:border-box;width:100%;padding:6px 0;color:var(--dsw-alias-label-primary)}',
       '.dshRecent_header{position:relative;display:flex;align-items:center;gap:2px;width:100%;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover-solid);padding:0 4px}',
       '.dshRecent_toggle{border:none;border-radius:var(--dsw-radius-sm);height:28px;min-width:0;padding:0 4px;cursor:pointer;background:0 0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;flex:1 1 auto;align-items:center;gap:4px;display:flex}',
       '.dshRecent_toggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
