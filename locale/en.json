@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Recent Sessions",
-    "description": "Adds a collapsible Recent group below the sidebar workspaces, listing sessions across projects, with an optional Windows desktop notification when a background session finishes."
+    "description": "Adds a collapsible Recent group below the sidebar workspaces, listing sessions across projects with rename, fork, archive and its own pinning; plus an optional Windows desktop notification when a background session finishes."
   }
 }

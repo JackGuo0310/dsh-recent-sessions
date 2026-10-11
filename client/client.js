@@ -32,14 +32,27 @@ window.__ModuleLoader__.load({
   id: '@jackguo0310/dsh-recent-sessions',
   factory(require) {
     const { jsx, jsxs, Fragment } = require('react/jsx-runtime');
-    const { useCallback, useEffect, useMemo, useRef, useState } = require('react');
+    const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = require('react');
+    // Platform seed table, so these resolve as bare specifiers exactly like the
+    // shipped rows use them. `MenuItemButton` is what makes the menu read as the
+    // native one — same role, focus walk, and shortcut-key placement.
+    const {
+      IconArchiveOutlineRegular,
+      IconBranchOutlineRegular,
+      IconEditOutlineRegular,
+      IconEllipsisOutlineRegular,
+      Button,
+      Menu,
+      MenuItemButton,
+      Modal,
+    } = require('@deepseek-ai/dsh-client-ui-primitives');
 
     // dsh:version-meta:begin
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.4.2",
-    "describe": "v0.4.2",
+    "tag": "v0.5.0",
+    "describe": "v0.5.0",
     "commit": null
   }
 );
@@ -73,6 +86,10 @@ const VERSION_META = Object.freeze(
     const PIN_STORAGE_KEY = 'dsh-recent-sessions:pins';
     /** Sort strategies offered by the header. One entry for now, by design. */
     const SORT_OPTIONS = [{ id: 'updated', labelKey: 'sort.updated' }];
+    /** Stable empty read for an unserved shortcut catalog. */
+    const EMPTY_SHORTCUTS = Object.freeze([]);
+    /** Subscribing to an absent catalog must still be a function. */
+    const NOOP_UNSUBSCRIBE = () => {};
     /**
      * Pin glyph, matching the one the workspace rows use so a pinned Session
      * reads identically in both places. The geometry follows the shipped
@@ -138,6 +155,15 @@ const VERSION_META = Object.freeze(
       '.dshRecent_pin:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px;border-radius:var(--dsw-radius-xs)}',
       '.dshRecent_row:hover .dshRecent_pin{display:inline-flex}',
       '.dshRecent_row:hover .dshRecent_time{display:none}',
+      // The row-action strip. Occupies no width at rest and appears with the
+      // row, matching the workspace rows' trailing affordance; the time yields
+      // rather than sharing the cell, exactly as the pin button does.
+      '.dshRecent_menu{display:none;flex:none;align-items:center;justify-content:center;padding:0 2px}',
+      '.dshRecent_row:hover .dshRecent_menu{display:inline-flex}',
+      '.dshRecent_menuButton{border:none;border-radius:var(--dsw-radius-sm);width:20px;height:20px;padding:0;cursor:pointer;color:var(--dsw-alias-label-tertiary);background:0 0;align-items:center;justify-content:center;display:inline-flex}',
+      '.dshRecent_menuButton:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_menuButton[aria-expanded="true"]{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshRecent_menuButton:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}',
       '.dshRecent_moreButton{border-radius:var(--dsw-radius-sm);width:100%;height:28px;padding:0 12px 0 28px;cursor:pointer;text-align:left;color:var(--dsw-alias-label-tertiary);background:0 0;border:none;font:inherit;font-size:12px}',
       '.dshRecent_moreButton:hover{color:var(--dsw-alias-label-secondary)}',
       '.dshRecent_empty{color:var(--dsw-alias-label-tertiary);padding:4px 12px 6px;margin-top:4px;font-size:12px;line-height:18px}',
@@ -293,6 +319,135 @@ const VERSION_META = Object.freeze(
       return typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : fallback;
     }
 
+    // ---------------------------------------------------------- row rename
+
+    /** The rename request one 「最近」 row menu raised. */
+    function createRenameRequests() {
+      let current = null;
+      const listeners = new Set();
+      return {
+        /**
+         * Read the pending request.
+         * @returns {object | null} the requested rename, or none.
+         */
+        getSnapshot: () => current,
+        /**
+         * Observe requests.
+         * @param {listener} - notified on every change.
+         * @returns {() => void} unsubscribe.
+         */
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+        /**
+         * Ask for a rename dialog.
+         * @param {object} target - Session identity and the title to seed.
+         */
+        request: (target) => {
+          current = target;
+          for (const listener of [...listeners]) listener();
+        },
+        /** Withdraw the request without opening anything. */
+        settle: () => {
+          current = null;
+          for (const listener of [...listeners]) listener();
+        },
+      };
+    }
+
+    /**
+     * The rename dialog raised from a 「最近」 row. `uiWorkspace` exposes fork and
+     * archive but keeps its own rename request private to the workspace browser's
+     * overlay entry, so this dialog is a second one over the same public Host call
+     * (`ctx.sessions.using(...).binding.session.rename`).
+     * @param {object} props - the shared request source and translator.
+     * @returns {object | null} the dialog while a rename is requested.
+     */
+    function RenameDialog({ requests, sessions, t }) {
+      const target = useSyncExternalStore(requests.subscribe, requests.getSnapshot);
+      const [draft, setDraft] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      // An IME keystroke named "Enter" must not submit; the same guard the
+      // shipped workspace rename dialog uses.
+      const composing = useRef(false);
+
+      // Seed the field when a new request arrives, and drop the draft when it is
+      // withdrawn. Both live in one effect so a settle never leaves a stale title.
+      useEffect(() => {
+        if (target === null) {
+          setDraft('');
+          setError('');
+          setBusy(false);
+          return;
+        }
+        setDraft(target.currentTitle);
+        setError('');
+        setBusy(false);
+      }, [target]);
+
+      if (target === null) return null;
+      const trimmed = draft.trim();
+      const blocked = busy || trimmed === '' || trimmed === target.currentTitle;
+
+      const close = () => {
+        if (busy) return;
+        requests.settle();
+      };
+
+      const confirm = () => {
+        if (blocked) return;
+        setBusy(true);
+        setError('');
+        sessions.using(target.sessionId, { source: 'workspaceOperation' }, (reference) => reference.binding.session.rename(trimmed))
+          .then((result) => {
+            setBusy(false);
+            if (result?.ok !== true) {
+              setError(result?.error?.message ?? t('menu.renameFailed'));
+              return;
+            }
+            requests.settle();
+          })
+          .catch((reason) => {
+            setBusy(false);
+            setError(reason instanceof Error ? reason.message : String(reason));
+          });
+      };
+
+      return jsx(Modal, {
+        open: true,
+        onClose: close,
+        closeLabel: t('menu.close'),
+        title: t('menu.renameTitle'),
+        footer: jsxs(Fragment, { children: [
+          jsx(Button, { key: 'cancel', variant: 'outline', disabled: busy, onClick: close, children: t('menu.cancel') }),
+          jsx(Button, { key: 'ok', variant: 'primary', disabled: blocked, onClick: confirm, children: t('menu.renameAction') }),
+        ] }),
+        children: jsxs(Fragment, { children: [
+          jsx('input', {
+            key: 'field',
+            className: 'dshRecentPage_input',
+            style: { width: '100%' },
+            value: draft,
+            'aria-label': t('menu.renameTitle'),
+            'data-modal-autofocus': true,
+            disabled: busy,
+            onFocus: (event) => { event.target.select(); },
+            onChange: (event) => { setDraft(event.target.value); setError(''); },
+            onCompositionStart: () => { composing.current = true; },
+            onCompositionEnd: () => { composing.current = false; },
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' || composing.current === true) return;
+              event.preventDefault();
+              confirm();
+            },
+          }),
+          error === '' ? null : jsx('p', { key: 'error', className: 'dshRecentPage_error', role: 'alert', children: error }),
+        ] }),
+      });
+    }
+
     // ------------------------------------------------------------------ rows
 
     /**
@@ -363,11 +518,12 @@ const VERSION_META = Object.freeze(
      * @param {object} props - row facts, status, selection, actions and translator.
      * @returns {object} the row element.
      */
-    function RecentRow({ row, status, selected, onOpen, onTogglePin, t }) {
+    function RecentRow({ row, status, selected, onOpen, onTogglePin, actions, shortcutFor, t }) {
       const statuses = sessionStatuses(status, t);
       const primary = statuses[0];
       const project = row.workspaceLabel;
       const pinned = row.pinned === true;
+      const [menuOpen, setMenuOpen] = useState(false);
       return jsxs('div', {
         className: selected ? 'dshRecent_row dshRecent_rowSelected' : 'dshRecent_row',
         role: 'listitem',
@@ -410,6 +566,74 @@ const VERSION_META = Object.freeze(
               event.stopPropagation();
             },
             children: jsx('svg', { viewBox: PIN_VIEW_BOX, 'aria-hidden': 'true', children: PIN_ART }),
+          }),
+          // The native actions, on the native `Menu` primitive so the popup reads
+          // exactly like the workspace row's: same portal, same dismissal, same
+          // keyboard walk. Only the pin entry deliberately differs — see below.
+          jsx('span', {
+            key: 'menu',
+            className: 'dshRecent_menu',
+            onClick: (event) => { event.stopPropagation(); },
+            children: jsx(Menu, {
+              open: menuOpen,
+              onClose: () => { setMenuOpen(false); },
+              portal: true,
+              closeOnPointerLeave: true,
+              anchor: jsx('button', {
+                type: 'button',
+                className: 'dshRecent_menuButton',
+                'aria-label': t('row.menu.aria', { name: displayTitle(row.title, t) }),
+                title: t('row.menu.aria', { name: displayTitle(row.title, t) }),
+                onClick: () => { setMenuOpen((open) => !open); },
+                children: jsx(IconEllipsisOutlineRegular, {}),
+              }),
+              children: jsxs(Fragment, { children: [
+                // Deliberately NOT the shipped pin action: that one writes the
+                // Host pin ledger and reorders the owning Workspace. 「最近」 keeps
+                // its own browser-local pin set, so this entry drives the same
+                // `onTogglePin` as the hover pin button and nothing in the
+                // workspace area moves.
+                jsx(MenuItemButton, {
+                  key: 'pin',
+                  icon: jsx('svg', { viewBox: PIN_VIEW_BOX, 'aria-hidden': 'true', width: 14, height: 14, children: PIN_ART }),
+                  onSelect: () => {
+                    setMenuOpen(false);
+                    onTogglePin(row.id, pinned);
+                  },
+                  children: t(pinned ? 'pin.remove' : 'pin.add'),
+                }),
+                jsx(MenuItemButton, {
+                  key: 'rename',
+                  shortcut: shortcutFor('session.rename'),
+                  icon: jsx(IconEditOutlineRegular, { size: 14 }),
+                  onSelect: () => {
+                    setMenuOpen(false);
+                    actions.rename(row.id, displayTitle(row.title, t));
+                  },
+                  children: t('menu.rename'),
+                }),
+                jsx(MenuItemButton, {
+                  key: 'fork',
+                  shortcut: shortcutFor('session.fork'),
+                  icon: jsx(IconBranchOutlineRegular, {}),
+                  onSelect: () => {
+                    setMenuOpen(false);
+                    actions.fork(row.id);
+                  },
+                  children: t('menu.fork'),
+                }),
+                jsx(MenuItemButton, {
+                  key: 'archive',
+                  shortcut: shortcutFor('session.archive'),
+                  icon: jsx(IconArchiveOutlineRegular, { size: 14 }),
+                  onSelect: () => {
+                    setMenuOpen(false);
+                    actions.archive(row.id);
+                  },
+                  children: t('menu.archive'),
+                }),
+              ] }),
+            }),
           }),
         ],
       });
@@ -462,7 +686,7 @@ const VERSION_META = Object.freeze(
      * @param {object} props - slot props: owner share, standard hooks, injected actions.
      * @returns {object | null} the section element, or null in the collapsed rail.
      */
-    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, t }) {
+    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, actions, shortcuts, t }) {
       const [expanded, setExpanded] = useState(true);
       const [limit, setLimit] = useState(null);
       const [sort, setSort] = useState('updated');
@@ -475,6 +699,15 @@ const VERSION_META = Object.freeze(
       const workspaces = useWorkspaces((state) => state.items);
       const archived = useWorkspaces((state) => state.archivedSessionIds);
       const preference = usePreference((state) => state);
+      // Subscribing here rather than reading once in `inject` is what keeps the
+      // menu's shortcut hints live: the renderer memoizes injected values, so a
+      // catalog captured there would never see a rebinding.
+      const shortcutRows = useSyncExternalStore(
+        (listener) => shortcuts?.catalog?.subscribe?.(listener) ?? NOOP_UNSUBSCRIBE,
+        () => shortcuts?.catalog?.getSnapshot?.() ?? EMPTY_SHORTCUTS,
+        () => EMPTY_SHORTCUTS,
+      );
+      const shortcutFor = (id) => shortcutRows.find((row) => row.id === id);
 
       const maxCount = readNumber(preference, 'maxCount', FALLBACK_MAX);
       const defaultCount = Math.min(readNumber(preference, 'defaultCount', FALLBACK_COUNT), maxCount);
@@ -612,6 +845,8 @@ const VERSION_META = Object.freeze(
               selected: row.id === currentId,
               onOpen,
               onTogglePin,
+              actions,
+              shortcutFor,
               t,
             })),
           }),
@@ -1055,6 +1290,15 @@ const VERSION_META = Object.freeze(
       'pin.add': '在「最近」中置顶',
       'pin.remove': '取消「最近」置顶',
       'row.project': '所属项目：{name}',
+      'row.menu.aria': '{name} 的更多操作',
+      'menu.rename': '重命名',
+      'menu.fork': '分叉会话',
+      'menu.archive': '归档会话',
+      'menu.renameTitle': '重命名会话',
+      'menu.renameAction': '重命名',
+      'menu.renameFailed': '重命名失败',
+      'menu.cancel': '取消',
+      'menu.close': '关闭',
       'time.now': '刚刚',
       'time.minutes': '{n}分钟',
       'time.hours': '{n}小时',
@@ -1112,6 +1356,15 @@ const VERSION_META = Object.freeze(
       'pin.add': 'Pin in Recent',
       'pin.remove': 'Unpin in Recent',
       'row.project': 'Project: {name}',
+      'row.menu.aria': 'More actions for {name}',
+      'menu.rename': 'Rename',
+      'menu.fork': 'Fork session',
+      'menu.archive': 'Archive session',
+      'menu.renameTitle': 'Rename session',
+      'menu.renameAction': 'Rename',
+      'menu.renameFailed': 'Could not rename the session',
+      'menu.cancel': 'Cancel',
+      'menu.close': 'Close',
       'time.now': 'now',
       'time.minutes': '{n}min',
       'time.hours': '{n}h',
@@ -1161,7 +1414,7 @@ const VERSION_META = Object.freeze(
     // ------------------------------------------------------------------ body
 
     /** Services used by the browser half. */
-    const inject = ['slots', 'locale', 'uiWorkspace', 'configForms'];
+    const inject = ['slots', 'locale', 'uiWorkspace', 'configForms', 'sessions', 'shortcuts'];
 
     /**
      * Mount both surfaces.
@@ -1189,13 +1442,54 @@ const VERSION_META = Object.freeze(
         uiWorkspace?.openSession(sessionId);
       };
 
+      // The row actions go through `uiWorkspace` — the same public capability the
+      // workspace rows use — so fork, archive and their Host refusals behave
+      // identically here. Rename is the exception: `uiWorkspace` keeps its rename
+      // request private to the workspace browser's overlay entry, so the dialog
+      // below drives the public `ctx.sessions` rename itself.
+      const renameRequests = createRenameRequests();
+      const sessions = ctx.get('sessions');
+      const actions = {
+        /**
+         * Open the rename dialog for one Session.
+         * @param {string} sessionId - Session to rename.
+         * @param {string} currentTitle - title the dialog seeds its draft from.
+         */
+        rename: (sessionId, currentTitle) => {
+          renameRequests.request({ sessionId, currentTitle });
+        },
+        /**
+         * Fork a Session at its last completed turn.
+         * @param {string} sessionId - source Session.
+         */
+        fork: (sessionId) => {
+          uiWorkspace?.forkSession(sessionId).catch((reason) => {
+            console.warn('recent-sessions fork rejected:', reason);
+          });
+        },
+        /**
+         * Archive a Session, asking the Host to stop its running work if the plain
+         * archive is refused.
+         * @param {string} sessionId - Session to archive.
+         */
+        archive: (sessionId) => {
+          uiWorkspace?.archiveSession(sessionId).catch((reason) => {
+            console.warn('recent-sessions archive rejected:', reason);
+          });
+        },
+      };
+      // Read lazily at call time where a hook cannot reach it, and subscribed where
+      // one can: the renderer memoizes injected values for the registration's
+      // lifetime, so anything captured here would freeze at first render.
+      const shortcuts = ctx.get('shortcuts');
+
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
         id: 'dsh-recent-sessions',
         order: 10,
         label: () => translate.current('section.label'),
         locale: NS,
-        inject: () => ({ ...hooks(), openSession, t: translate.current }),
+        inject: () => ({ ...hooks(), openSession, actions, shortcuts, t: translate.current }),
       }, RecentSessionsSection));
 
       // Registered unconditionally: the navigation row is a projection of this
@@ -1230,6 +1524,21 @@ const VERSION_META = Object.freeze(
           },
         }),
       }, RecentSessionsSettings));
+
+      // The rename dialog a 「最近」 row menu raises. `shell.overlay` is the
+      // sanctioned top-layer seat, so the dialog covers the frame exactly as the
+      // workspace rename dialog does and takes the same modal focus handling.
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+        name: 'shell.overlay',
+        id: 'dsh-recent-sessions-rename',
+        order: 91,
+        locale: NS,
+        inject: () => ({
+          requests: renameRequests,
+          sessions,
+          t: translate.current,
+        }),
+      }, RenameDialog));
 
       // The notifier renders nothing, so it is a pure observer. It lives in
       // `shell.overlay` because that is the sanctioned root-scoped seat holding
