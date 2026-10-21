@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
     const {
       IconArchiveOutlineRegular,
       IconBranchOutlineRegular,
+      IconCopyOutlineRegular,
       IconEditOutlineRegular,
       IconEllipsisOutlineRegular,
       IconPinFillRegular,
@@ -48,14 +49,15 @@ window.__ModuleLoader__.load({
       MenuItemButton,
       Modal,
       Tooltip,
+      writeClipboard,
     } = require('@deepseek-ai/dsh-client-ui-primitives');
 
     // dsh:version-meta:begin
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.2",
-    "describe": "v0.5.2",
+    "tag": "v0.5.3",
+    "describe": "v0.5.3",
     "commit": null
   }
 );
@@ -608,6 +610,18 @@ const VERSION_META = Object.freeze(
                       actions.archive(row.id);
                     },
                     children: t('menu.archive'),
+                  }),
+                  // Same entry the shipped row menu now carries, in the shipped
+                  // slot: last, after archive. It copies the whole Session id and
+                  // never opens the Session, so the menu is dismissed first.
+                  jsx(MenuItemButton, {
+                    key: 'sessionId',
+                    icon: jsx(IconCopyOutlineRegular, {}),
+                    onSelect: () => {
+                      setMenuOpen(false);
+                      actions.copyId(row.id);
+                    },
+                    children: t('menu.copyId'),
                   }),
                 ] }),
               }),
@@ -1292,6 +1306,7 @@ const VERSION_META = Object.freeze(
       'menu.rename': '重命名',
       'menu.fork': '分叉会话',
       'menu.archive': '归档会话',
+      'menu.copyId': '复制 Session ID',
       'menu.renameTitle': '重命名会话',
       'menu.renameAction': '重命名',
       'menu.renameFailed': '重命名失败',
@@ -1358,6 +1373,7 @@ const VERSION_META = Object.freeze(
       'menu.rename': 'Rename',
       'menu.fork': 'Fork session',
       'menu.archive': 'Archive session',
+      'menu.copyId': 'Copy Session ID',
       'menu.renameTitle': 'Rename session',
       'menu.renameAction': 'Rename',
       'menu.renameFailed': 'Could not rename the session',
@@ -1474,6 +1490,17 @@ const VERSION_META = Object.freeze(
           uiWorkspace?.archiveSession(sessionId).catch((reason) => {
             console.warn('recent-sessions archive rejected:', reason);
           });
+        },
+        /**
+         * Copy one Session's complete id.
+         *
+         * `writeClipboard` is the primitive's own helper — the same call the
+         * shipped menu makes — so behaviour (including the execCommand fallback)
+         * matches instead of being reimplemented here.
+         * @param {string} sessionId - Session whose id is copied.
+         */
+        copyId: (sessionId) => {
+          writeClipboard(sessionId).catch(() => false);
         },
       };
       // No shortcut catalog is read here: the shipped menu rows show key hints,
