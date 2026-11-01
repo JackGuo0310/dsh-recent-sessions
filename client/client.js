@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
       IconDownloadOutlineRegular,
       IconEditOutlineRegular,
       IconEllipsisOutlineRegular,
-      IconFolderOpenOutlineRegular,
+      IconPanelLeftOutlineRegular,
       IconPinFillRegular,
       IconPinOutlineRegular,
       IconRightUpOutlineRegular,
@@ -63,8 +63,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.4",
-    "describe": "v0.5.4",
+    "tag": "v0.5.5",
+    "describe": "v0.5.5",
     "commit": null
   }
 );
@@ -1307,9 +1307,9 @@ const VERSION_META = Object.freeze(
      * and the focus hand-back are the shipped behaviour rather than reimplemented
      * here. The entries are the shipped file actions: native open and reveal
      * through the Session Remote (`openWorkspacePath` — the call the document
-     * preview's own file control makes), the right Sidebar's File Explorer page,
-     * and bounded reads through the `workspaceFiles` Remote for the copy and save
-     * entries.
+     * preview's own file control makes), opening the file in the right Sidebar
+     * through its resource page, and bounded reads through the `workspaceFiles`
+     * Remote for the copy and save entries.
      *
      * What disappears and what can only be disabled:
      *
@@ -1319,9 +1319,6 @@ const VERSION_META = Object.freeze(
      *   - A reference the Host's file service can no longer resolve leaves every
      *     entry that would act on the file disabled, while 「复制路径」 keeps
      *     copying the resolved path.
-     *   - A reference outside the Session workspace cannot be reached by the File
-     *     Explorer page, which is rooted at that workspace, so only that entry is
-     *     disabled for it.
      *
      * A left click is untouched: this module only inspects `contextmenu`, and the
      * shipped click handler keeps owning the reference itself.
@@ -1335,12 +1332,12 @@ const VERSION_META = Object.freeze(
     /** Menu ids, stable across renders so the shipped row highlight keeps working. */
     const FILE_MENU_ITEMS = {
       open: 'open',
-      explorer: 'explorer',
+      reveal: 'reveal',
+      sidebar: 'sidebar',
       openWith: 'openWith',
       saveAs: 'saveAs',
       copyPath: 'copyPath',
       copyContents: 'copyContents',
-      reveal: 'reveal',
     };
 
     /**
@@ -1367,19 +1364,40 @@ const VERSION_META = Object.freeze(
     }
 
     /**
-     * Whether one path is the workspace root itself or a descendant of it.
-     * @param {string | undefined} root - Session workspace root.
-     * @param {string} path - rooted path to test.
-     * @returns {boolean} whether the File Explorer page can reach the path.
+     * Encode one `dsh-resource://file/…` path segment, keeping a drive letter's
+     * colon literal the way the shipped address helpers do.
+     * @param {string} segment - one path or identity segment.
+     * @returns {string} the encoded segment.
      */
-    function insideWorkspace(root, path) {
-      if (root === undefined || root === '') return false;
-      const normalize = (value) => value.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
-      const windows = root.includes('\\') || /^[A-Za-z]:/.test(root);
-      const compare = (value) => (windows ? value.toLowerCase() : value);
-      const target = compare(normalize(path));
-      const base = compare(normalize(root));
-      return target === base || target.startsWith(`${base}/`);
+    function encodeSegment(segment) {
+      return encodeURIComponent(segment).replace(/%3A/gi, ':');
+    }
+
+    /**
+     * Encode a `/`-separated path segment by segment.
+     * @param {string} path - slash-separated path.
+     * @returns {string} the encoded path.
+     */
+    function encodePath(path) {
+      return path.split('/').map(encodeSegment).join('/');
+    }
+
+    /**
+     * Build the right Sidebar's `file` address for one Host path. A path inside
+     * the Session workspace is addressed workspace-relative; anything else keeps
+     * its absolute spelling, which the resource provider resolves as-is.
+     * @param {object} session - Session identity and workspace root.
+     * @param {string} absolutePath - Host path the file service resolved.
+     * @returns {string} the `dsh-resource://file/…` address.
+     */
+    function fileAddress(session, absolutePath) {
+      const normalized = absolutePath.replace(/\\/g, '/');
+      const root = session.cwd === undefined ? '' : session.cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+      let path = normalized;
+      if (root !== '' && (normalized === root || normalized.startsWith(`${root}/`))) {
+        path = normalized === root ? '' : normalized.slice(root.length + 1);
+      }
+      return `dsh-resource://file/session/${encodeSegment(session.sessionId)}/${encodePath(path.replace(/^(?:\.\/)+/, ''))}`;
     }
 
     /**
@@ -1598,9 +1616,8 @@ const VERSION_META = Object.freeze(
         return {
           stat,
           absolutePath,
-          insideWorkspace: insideWorkspace(session.cwd, absolutePath),
           desktop: canUseDesktop,
-          explorer: sidebarRight !== undefined && typeof sidebarRight.openTab === 'function',
+          sidebar: sidebarRight !== undefined && typeof sidebarRight.openResource === 'function',
           applications,
         };
       }
@@ -1634,9 +1651,8 @@ const VERSION_META = Object.freeze(
             resolved: {
               stat: null,
               absolutePath: rootedPath(session.cwd, reference.path),
-              insideWorkspace: false,
               desktop: false,
-              explorer: false,
+              sidebar: false,
               applications: [],
             },
           });
@@ -1713,16 +1729,16 @@ const VERSION_META = Object.freeze(
           notify(anchor, t(copied ? 'file.pathCopied' : 'file.copyFailed'), copied ? 'success' : 'error');
           return;
         }
-        if (id === FILE_MENU_ITEMS.explorer) {
+        if (id === FILE_MENU_ITEMS.sidebar) {
           const sidebarRight = service('sidebarRight');
-          if (sidebarRight === undefined || typeof sidebarRight.openTab !== 'function') {
-            notify(anchor, t('file.explorerFailed'), 'error');
+          if (sidebarRight === undefined || typeof sidebarRight.openResource !== 'function') {
+            notify(anchor, t('file.sidebarFailed'), 'error');
             return;
           }
           try {
-            sidebarRight.openTab('files');
+            sidebarRight.openResource(fileAddress(session, resolved.absolutePath));
           } catch {
-            notify(anchor, t('file.explorerFailed'), 'error');
+            notify(anchor, t('file.sidebarFailed'), 'error');
           }
           return;
         }
@@ -1893,12 +1909,17 @@ const VERSION_META = Object.freeze(
           label: t('file.open'),
           icon: jsx(IconRightUpOutlineRegular, {}),
         });
-      }
-      if (resolved.insideWorkspace && resolved.explorer === true) {
         items.push({
-          id: FILE_MENU_ITEMS.explorer,
-          label: t('file.explorer'),
-          icon: jsx(IconFolderOpenOutlineRegular, {}),
+          id: FILE_MENU_ITEMS.reveal,
+          label: t('file.reveal'),
+          icon: jsx(IconBrowseOutlineRegular, {}),
+        });
+      }
+      if (resolved.sidebar === true) {
+        items.push({
+          id: FILE_MENU_ITEMS.sidebar,
+          label: t('file.sidebar'),
+          icon: jsx(IconPanelLeftOutlineRegular, {}),
         });
       }
       if (resolved.desktop && resolved.applications.length > 0) {
@@ -1933,14 +1954,6 @@ const VERSION_META = Object.freeze(
         label: t('file.copyContents'),
         icon: jsx(IconDeliverDocRegular, {}),
       });
-      if (resolved.desktop) {
-        items.push({ type: 'separator', id: 'native-separator' });
-        items.push({
-          id: FILE_MENU_ITEMS.reveal,
-          label: t('file.reveal'),
-          icon: jsx(IconBrowseOutlineRegular, {}),
-        });
-      }
       return items;
     }
 
@@ -2075,13 +2088,13 @@ const VERSION_META = Object.freeze(
       'file.loading': '正在检查文件…',
       'file.missing': '文件不存在',
       'file.open': '打开文件',
-      'file.explorer': '在 File Explorer 中打开',
+      'file.reveal': '在资源管理器中打开',
+      'file.sidebar': '在右侧栏打开',
       'file.openWith': '打开方式',
       'file.defaultApp': '{name}（默认）',
       'file.saveAs': '另存为…',
       'file.copyPath': '复制路径',
       'file.copyContents': '复制文件内容',
-      'file.reveal': '在资源管理器中打开',
       'file.pathCopied': '路径已复制',
       'file.contentsCopied': '文件内容已复制',
       'file.saved': '副本已保存',
@@ -2089,7 +2102,7 @@ const VERSION_META = Object.freeze(
       'file.notText': '这不是文本文件，无法复制内容',
       'file.openFailed': '无法打开文件',
       'file.revealFailed': '无法在资源管理器中显示',
-      'file.explorerFailed': '无法打开 File Explorer',
+      'file.sidebarFailed': '无法在右侧栏打开',
       'file.saveFailed': '无法保存副本',
       'file.actionFailed': '操作失败',
       'settings.invalid': '默认条数和展开步长请输入 1 到 {maxCount} 之间的整数，高度请输入 1 到 {maxRows} 之间的整数。',
@@ -2162,13 +2175,13 @@ const VERSION_META = Object.freeze(
       'file.loading': 'Checking the file…',
       'file.missing': 'File not found',
       'file.open': 'Open file',
-      'file.explorer': 'Open in File Explorer',
+      'file.reveal': 'Reveal in File Explorer',
+      'file.sidebar': 'Open in sidebar',
       'file.openWith': 'Open with',
       'file.defaultApp': '{name} (default)',
       'file.saveAs': 'Save as…',
       'file.copyPath': 'Copy path',
       'file.copyContents': 'Copy file contents',
-      'file.reveal': 'Reveal in File Explorer',
       'file.pathCopied': 'Path copied',
       'file.contentsCopied': 'File contents copied',
       'file.saved': 'Copy saved',
@@ -2176,7 +2189,7 @@ const VERSION_META = Object.freeze(
       'file.notText': 'This is not a text file, so its contents cannot be copied',
       'file.openFailed': 'Could not open the file',
       'file.revealFailed': 'Could not reveal the file',
-      'file.explorerFailed': 'Could not open File Explorer',
+      'file.sidebarFailed': 'Could not open it in the sidebar',
       'file.saveFailed': 'Could not save a copy',
       'file.actionFailed': 'The action failed',
       'settings.invalid': 'Enter 1–{maxCount} for the default count and expansion step, and 1–{maxRows} for the height.',
