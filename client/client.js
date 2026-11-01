@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       IconEditOutlineRegular,
       IconEllipsisOutlineRegular,
       IconPanelLeftOutlineRegular,
+      IconPaperclipOutlineRegular,
       IconPinFillRegular,
       IconPinOutlineRegular,
       IconRightUpOutlineRegular,
@@ -63,8 +64,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.6",
-    "describe": "v0.5.6",
+    "tag": "v0.5.7",
+    "describe": "v0.5.7",
     "commit": null
   }
 );
@@ -1338,6 +1339,7 @@ const VERSION_META = Object.freeze(
       saveAs: 'saveAs',
       copyPath: 'copyPath',
       copyContents: 'copyContents',
+      copyFile: 'copyFile',
     };
 
     /**
@@ -1571,22 +1573,52 @@ const VERSION_META = Object.freeze(
 
       /**
        * Read one complete regular file through the workspace file service.
+       *
+       * The service refuses (rather than truncates) a file above the Host's
+       * complete-file cap, so the refusal code travels back with the result and
+       * the caller can say why nothing was copied.
        * @param {object} session - Session identity.
        * @param {string} path - rooted path the Host resolved.
-       * @returns {Promise<Uint8Array | null>} bytes, or null when unavailable.
+       * @returns {Promise<{ data: Uint8Array | null, code: string | null }>} bytes, or the failure code.
        */
       async function readFile(session, path) {
         const workspaces = service('remote.workspaceFiles') ?? service('remote')?.workspaceFiles;
-        if (workspaces === undefined || typeof workspaces.readBytes !== 'function') return null;
-        if (session.sessionId === undefined) return null;
+        if (workspaces === undefined || typeof workspaces.readBytes !== 'function') {
+          return { data: null, code: 'unavailable' };
+        }
+        if (session.sessionId === undefined) return { data: null, code: 'unavailable' };
         try {
           const result = await workspaces.readBytes(session.sessionId, path, {});
-          if (result?.ok !== true) return null;
+          if (result?.ok !== true) return { data: null, code: result?.error?.code ?? 'failed' };
           const data = result.value?.data;
-          return data instanceof Uint8Array ? data : null;
+          return data instanceof Uint8Array
+            ? { data, code: null }
+            : { data: null, code: 'failed' };
         } catch {
-          return null;
+          return { data: null, code: 'failed' };
         }
+      }
+
+      /**
+       * Copy one file onto the Host machine's system clipboard as a file, through
+       * the host half's authenticated route.
+       * @param {object} resolved - availability facts.
+       * @param {Element | null} anchor - element the notice points at.
+       * @returns {Promise<void>} after the notice published.
+       */
+      async function copyFileToClipboard(resolved, anchor) {
+        let ok = false;
+        try {
+          const response = await fetch('api/recent-sessions.copy-file', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ path: resolved.absolutePath }),
+          });
+          ok = response.ok;
+        } catch {
+          ok = false;
+        }
+        notify(anchor, t(ok ? 'file.fileCopied' : 'file.copyFileFailed'), ok ? 'success' : 'error');
       }
 
       /**
@@ -1815,6 +1847,10 @@ const VERSION_META = Object.freeze(
           await copyContents(session, resolved, anchor);
           return;
         }
+        if (id === FILE_MENU_ITEMS.copyFile) {
+          await copyFileToClipboard(resolved, anchor);
+          return;
+        }
         if (remote === undefined || typeof remote.openWorkspacePath !== 'function') {
           notify(anchor, t('file.openFailed'), 'error');
           return;
@@ -1846,14 +1882,14 @@ const VERSION_META = Object.freeze(
        * @returns {Promise<void>} after the notice published.
        */
       async function copyContents(session, resolved, anchor) {
-        const bytes = await readFile(session, resolved.absolutePath);
-        if (bytes === null) {
-          notify(anchor, t('file.copyFailed'), 'error');
+        const read = await readFile(session, resolved.absolutePath);
+        if (read.data === null) {
+          notify(anchor, t(read.code === 'workspace-file/too-large' ? 'file.tooLarge' : 'file.copyFailed'), 'error');
           return;
         }
         let text;
         try {
-          text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+          text = new TextDecoder('utf-8', { fatal: true }).decode(read.data);
         } catch {
           notify(anchor, t('file.notText'), 'error');
           return;
@@ -1886,15 +1922,15 @@ const VERSION_META = Object.freeze(
             picker = null;
           }
         }
-        const bytes = await readFile(session, resolved.absolutePath);
-        if (bytes === null) {
-          notify(anchor, t('file.saveFailed'), 'error');
+        const read = await readFile(session, resolved.absolutePath);
+        if (read.data === null) {
+          notify(anchor, t(read.code === 'workspace-file/too-large' ? 'file.tooLarge' : 'file.saveFailed'), 'error');
           return;
         }
         if (picker !== null) {
           try {
             const stream = await picker.createWritable();
-            await stream.write(new Blob([bytes]));
+            await stream.write(new Blob([read.data]));
             await stream.close();
             notify(anchor, t('file.saved'), 'success');
           } catch {
@@ -1902,7 +1938,7 @@ const VERSION_META = Object.freeze(
           }
           return;
         }
-        const url = URL.createObjectURL(new Blob([bytes]));
+        const url = URL.createObjectURL(new Blob([read.data]));
         const link = document.createElement('a');
         link.href = url;
         link.download = name === '' ? 'download' : name;
@@ -2040,6 +2076,11 @@ const VERSION_META = Object.freeze(
         id: FILE_MENU_ITEMS.copyContents,
         label: t('file.copyContents'),
         icon: jsx(IconDeliverDocRegular, {}),
+      });
+      items.push({
+        id: FILE_MENU_ITEMS.copyFile,
+        label: t('file.copyFile'),
+        icon: jsx(IconPaperclipOutlineRegular, {}),
       });
       return items;
     }
@@ -2196,6 +2237,10 @@ const VERSION_META = Object.freeze(
       'file.saveAs': '另存为…',
       'file.copyPath': '复制路径',
       'file.copyContents': '复制文件内容',
+      'file.copyFile': '复制文件',
+      'file.fileCopied': '文件已复制到剪贴板',
+      'file.copyFileFailed': '无法复制文件',
+      'file.tooLarge': '文件太大，无法读取',
       'file.pathCopied': '路径已复制',
       'file.contentsCopied': '文件内容已复制',
       'file.saved': '副本已保存',
@@ -2283,6 +2328,10 @@ const VERSION_META = Object.freeze(
       'file.saveAs': 'Save as…',
       'file.copyPath': 'Copy path',
       'file.copyContents': 'Copy file contents',
+      'file.copyFile': 'Copy file',
+      'file.fileCopied': 'File copied to the clipboard',
+      'file.copyFileFailed': 'Could not copy the file',
+      'file.tooLarge': 'The file is too large to read',
       'file.pathCopied': 'Path copied',
       'file.contentsCopied': 'File contents copied',
       'file.saved': 'Copy saved',

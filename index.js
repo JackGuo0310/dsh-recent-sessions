@@ -17,13 +17,23 @@
  * `configForms.get('dsh-recent-sessions')` reads.
  */
 
+import { execFile } from 'node:child_process';
+import { realpath, stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
+import { promisify } from 'node:util';
 import z from '@deepseek-ai/schemastery';
 
 /** Stable Cordis plugin name; matches the row id in cordis.patch.yml. */
 export const name = 'dsh-recent-sessions';
 
-/** No host services are required. */
+/** No host services are required to mount; the clipboard route waits for `connection`. */
 export const inject = [];
+
+/** Authenticated route the client half posts a file path to. */
+const COPY_FILE_PATH = '/api/recent-sessions.copy-file';
+
+/** Native PowerShell launcher used for the Windows file-drop clipboard write. */
+const runPowerShell = promisify(execFile);
 
 /** Shipped defaults and the accepted range of the user preferences. */
 export const Config = z.object({
@@ -46,14 +56,74 @@ export const Config = z.object({
 });
 
 /**
+ * Put one Host file on the Host's system clipboard as a file drop list, so the
+ * user can paste the file itself (Explorer, mail, chat) rather than its text.
+ *
+ * The browser cannot write files to the OS clipboard, so the client half posts
+ * the path to this authenticated route and Windows PowerShell's `Set-Clipboard
+ * -LiteralPath` performs the native write. The request only ever names an
+ * existing regular file: the handler stats it, resolves symlinks, and hands the
+ * canonical path to PowerShell as one quoted argument (no shell interpolation).
+ * @param {Request} request - authenticated POST whose JSON body carries `path`.
+ * @returns {Promise<Response>} the outcome the client reports.
+ */
+async function copyFileToClipboard(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response('Invalid JSON body.', { status: 400 });
+  }
+  const raw = typeof body?.path === 'string' ? body.path.trim() : '';
+  if (raw === '' || !isAbsolute(raw)) {
+    return new Response('An absolute file path is required.', { status: 400 });
+  }
+  let info;
+  try {
+    info = await stat(raw);
+  } catch {
+    return new Response('File not found.', { status: 404 });
+  }
+  if (!info.isFile()) {
+    return new Response('The path is not a regular file.', { status: 400 });
+  }
+  if (process.platform !== 'win32') {
+    return new Response('Copying files is only supported on a Windows Host.', { status: 501 });
+  }
+  try {
+    const canonical = await realpath(raw);
+    const escaped = canonical.replace(/'/g, "''");
+    await runPowerShell('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Set-Clipboard -LiteralPath '${escaped}'`,
+    ], { windowsHide: true, timeout: 15_000 });
+  } catch {
+    return new Response('The Host could not copy the file.', { status: 500 });
+  }
+  return Response.json({ copied: true });
+}
+
+/**
  * Mount the host half.
  *
- * Intentionally empty: this plugin contributes nothing on the Node side. The
- * Client half reads its own row config through `ctx.config` when the profile
- * ships one, and falls back to `DEFAULT_CONFIG` otherwise.
- * @param _ctx - Cordis host context (unused).
+ * The sidebar, settings page and file menu all live in the Client half. This
+ * half only contributes the authenticated clipboard route used by the file
+ * menu's 「复制文件」 entry; the route waits for the Connection service, so a
+ * composition without a web client mounts this plugin without that surface.
+ * @param {object} ctx - Cordis host context.
  */
-export function apply(_ctx) {}
+export function apply(ctx) {
+  ctx.inject(['connection'], (scope) => {
+    scope.connection.fetch.register({
+      path: COPY_FILE_PATH,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: (request) => copyFileToClipboard(request),
+    });
+  });
+}
 
 /** Shipped defaults mirrored for the browser half's offline fallback. */
 export const DEFAULT_CONFIG = Object.freeze({
