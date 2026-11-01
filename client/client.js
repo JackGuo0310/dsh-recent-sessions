@@ -63,8 +63,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.5",
-    "describe": "v0.5.5",
+    "tag": "v0.5.6",
+    "describe": "v0.5.6",
     "commit": null
   }
 );
@@ -1477,6 +1477,7 @@ const VERSION_META = Object.freeze(
         session: null,
         anchor: null,
         notice: null,
+        apps: null,
       });
       let snapshot = CLOSED;
       const listeners = new Set();
@@ -1486,6 +1487,13 @@ const VERSION_META = Object.freeze(
       let generation = 0;
       /** Cached native-desktop answer: null while unknown, otherwise a boolean. */
       let desktop = null;
+      /**
+       * Associations already read per Session path. The 「打开方式」 list is the
+       * one expensive host read (Windows enumerates registered handlers), so it
+       * is fetched when that entry is first expanded rather than on open, and a
+       * later right-click on the same file reuses the answer.
+       */
+      const applicationsCache = new Map();
 
       /** Notify every subscription of a state change. */
       const emit = () => {
@@ -1601,25 +1609,70 @@ const VERSION_META = Object.freeze(
         const absolutePath = stat?.absolutePath ?? rootedPath(session.cwd, path);
         const canUseDesktop = await desktopAvailable();
         const sidebarRight = service('sidebarRight');
-        let applications = [];
-        if (canUseDesktop && stat !== null) {
-          const remote = service('remote.session') ?? service('remote')?.session;
-          if (remote !== undefined && typeof remote.workspacePathApplications === 'function') {
-            try {
-              const result = await remote.workspacePathApplications({ path: absolutePath });
-              if (result?.ok === true && Array.isArray(result.value)) applications = result.value;
-            } catch {
-              applications = [];
-            }
-          }
-        }
         return {
           stat,
           absolutePath,
           desktop: canUseDesktop,
           sidebar: sidebarRight !== undefined && typeof sidebarRight.openResource === 'function',
-          applications,
         };
+      }
+
+      /**
+       * Cache key of one file's file associations.
+       * @param {object} session - Session identity.
+       * @param {string} absolutePath - Host path the file service resolved.
+       * @returns {string} the cache key.
+       */
+      function applicationsKey(session, absolutePath) {
+        return `${session.sessionId}\n${absolutePath}`;
+      }
+
+      /**
+       * Load the 「打开方式」 list for the open menu, once per file.
+       *
+       * The primitive has no hover callback for a submenu, so the shipped menu's
+       * submenu item starts with a loading row and this method is called when the
+       * overlay sees that row's trigger hovered (or when the row is clicked). A
+       * cached answer is published synchronously, so a second right-click on the
+       * same file never pays for the host read.
+       * @returns {Promise<void>} after the list or its failure is published.
+       */
+      async function loadApplications() {
+        const state = snapshot;
+        if (state.open !== true || state.resolved === null || state.session === null) return;
+        if (state.resolved.desktop !== true || state.resolved.stat === null) return;
+        const key = applicationsKey(state.session, state.resolved.absolutePath);
+        const cached = applicationsCache.get(key);
+        if (cached !== undefined) {
+          if (state.apps?.key !== key || state.apps.status !== 'ready') {
+            publish({ apps: { key, status: 'ready', list: cached } });
+          }
+          return;
+        }
+        if (state.apps?.key === key && (state.apps.status === 'loading' || state.apps.status === 'failed')) return;
+        publish({ apps: { key, status: 'loading', list: [] } });
+        const remote = service('remote.session') ?? service('remote')?.session;
+        let list = [];
+        let ok = false;
+        if (remote !== undefined && typeof remote.workspacePathApplications === 'function') {
+          try {
+            const result = await remote.workspacePathApplications({ path: state.resolved.absolutePath });
+            if (result?.ok === true && Array.isArray(result.value)) {
+              list = result.value;
+              ok = true;
+            }
+          } catch {
+            ok = false;
+          }
+        }
+        if (snapshot.open !== true || snapshot.apps?.key !== key) return;
+        if (!ok) {
+          publish({ apps: { key, status: 'failed', list: [] } });
+          return;
+        }
+        if (applicationsCache.size > 64) applicationsCache.clear();
+        applicationsCache.set(key, list);
+        publish({ apps: { key, status: 'ready', list } });
       }
 
       /**
@@ -1640,10 +1693,19 @@ const VERSION_META = Object.freeze(
           session,
           anchor: point,
           notice: null,
+          apps: null,
         });
         inspect(session, reference.path).then((resolved) => {
           if (id !== generation || snapshot.open !== true) return;
-          publish({ pending: false, resolved });
+          const key = applicationsKey(session, resolved.absolutePath);
+          const cached = applicationsCache.get(key);
+          publish({
+            pending: false,
+            resolved,
+            apps: resolved.desktop && resolved.stat !== null
+              ? { key, status: cached === undefined ? 'idle' : 'ready', list: cached ?? [] }
+              : null,
+          });
         }, () => {
           if (id !== generation || snapshot.open !== true) return;
           publish({
@@ -1653,8 +1715,8 @@ const VERSION_META = Object.freeze(
               absolutePath: rootedPath(session.cwd, reference.path),
               desktop: false,
               sidebar: false,
-              applications: [],
             },
+            apps: null,
           });
         });
         return true;
@@ -1664,7 +1726,7 @@ const VERSION_META = Object.freeze(
       function close() {
         if (snapshot.open !== true) return;
         generation += 1;
-        publish({ open: false, pending: false, resolved: null, target: null, session: null });
+        publish({ open: false, pending: false, resolved: null, target: null, session: null, apps: null });
       }
 
       /**
@@ -1693,10 +1755,12 @@ const VERSION_META = Object.freeze(
       }
 
       /**
-       * Forget the cached desktop answer when the connection generation changes.
+       * Forget the cached desktop answer and file associations when the connection
+       * generation changes.
        */
       function resetHostFacts() {
         desktop = null;
+        applicationsCache.clear();
       }
 
       /**
@@ -1719,9 +1783,10 @@ const VERSION_META = Object.freeze(
        * @param {object} resolved - availability facts captured when the menu opened.
        * @param {object} target - the reference the menu acts on.
        * @param {string} id - selected menu item id.
+       * @param {Array<object>} applications - the 「打开方式」 list the item was built from.
        * @returns {Promise<void>} after the action settled and its notice published.
        */
-      async function run(session, resolved, target, id) {
+      async function run(session, resolved, target, id, applications) {
         const remote = service('remote.session') ?? service('remote')?.session;
         const anchor = target?.element ?? null;
         if (id === FILE_MENU_ITEMS.copyPath) {
@@ -1757,7 +1822,7 @@ const VERSION_META = Object.freeze(
         let request = { path: resolved.absolutePath };
         if (id === FILE_MENU_ITEMS.reveal) request = { path: resolved.absolutePath, action: 'reveal' };
         if (id.startsWith('app:')) {
-          const application = resolved.applications[Number(id.slice(4))];
+          const application = applications[Number(id.slice(4))];
           if (application === undefined) return;
           request = { path: resolved.absolutePath, application: application.id };
         }
@@ -1850,15 +1915,22 @@ const VERSION_META = Object.freeze(
       }
 
       /**
-       * Run the action one selected item names.
+       * Run the action one selected item names. The 「打开方式」 trigger row only
+       * loads the list and leaves the menu open, so its submenu can render it in
+       * place.
        * @param {string} id - selected menu item id.
        */
       function select(id) {
+        if (id === 'apps-load') {
+          loadApplications().catch(() => {});
+          return;
+        }
         const state = snapshot;
         const { target, resolved, session } = state;
+        const applications = state.apps === null ? [] : state.apps.list;
         close();
         if (target === null || resolved === null || session === null) return;
-        run(session, resolved, target, id).catch(() => {
+        run(session, resolved, target, id, applications).catch(() => {
           notify(target.element ?? null, t('file.actionFailed'), 'error');
         });
       }
@@ -1870,6 +1942,7 @@ const VERSION_META = Object.freeze(
         open,
         close,
         select,
+        loadApplications,
         anchorRect,
         dismissNotice,
         resetHostFacts,
@@ -1922,21 +1995,35 @@ const VERSION_META = Object.freeze(
           icon: jsx(IconPanelLeftOutlineRegular, {}),
         });
       }
-      if (resolved.desktop && resolved.applications.length > 0) {
-        items.push({
-          id: FILE_MENU_ITEMS.openWith,
-          label: t('file.openWith'),
-          icon: jsx(IconAppsAddOutlineRegular, {}),
-          submenu: resolved.applications.map((application, index) => ({
-            id: `app:${index}`,
-            label: application.default === true
-              ? t('file.defaultApp', { name: application.name })
-              : application.name,
-            icon: typeof application.icon === 'string' && application.icon !== ''
-              ? jsx('img', { src: application.icon, alt: '', className: 'dshRecent_appIcon' })
-              : undefined,
-          })),
-        });
+      if (resolved.desktop && state.apps !== null) {
+        const apps = state.apps;
+        if (apps.status === 'ready' && apps.list.length > 0) {
+          items.push({
+            id: FILE_MENU_ITEMS.openWith,
+            label: t('file.openWith'),
+            icon: jsx(IconAppsAddOutlineRegular, {}),
+            submenu: apps.list.map((application, index) => ({
+              id: `app:${index}`,
+              label: application.default === true
+                ? t('file.defaultApp', { name: application.name })
+                : application.name,
+              icon: typeof application.icon === 'string' && application.icon !== ''
+                ? jsx('img', { src: application.icon, alt: '', className: 'dshRecent_appIcon' })
+                : undefined,
+            })),
+          });
+        } else if (apps.status !== 'failed') {
+          // The list is read only when this submenu is expanded, so its trigger
+          // starts with one loading row; hovering the trigger starts the read (the
+          // row is clickable too, as a fallback) and the rows are replaced once the
+          // Host answers.
+          items.push({
+            id: FILE_MENU_ITEMS.openWith,
+            label: t('file.openWith'),
+            icon: jsx(IconAppsAddOutlineRegular, {}),
+            submenu: [{ id: 'apps-load', label: t('file.loading') }],
+          });
+        }
       }
       items.push({ type: 'separator', id: 'actions-separator' });
       items.push({
@@ -1998,8 +2085,22 @@ const VERSION_META = Object.freeze(
           event.preventDefault();
           event.stopPropagation();
         };
+        // The shipped menu has no submenu-hover callback, so the one submenu it
+        // holds — 「打开方式」 — is recognized by its submenu trigger and its list is
+        // read at that moment rather than while opening the menu.
+        const onMouseOver = (event) => {
+          if (menu.getSnapshot().open !== true) return;
+          const element = event.target instanceof Element ? event.target : null;
+          if (element === null) return;
+          if (element.closest('button[role="menuitem"][aria-haspopup="menu"]') === null) return;
+          menu.loadApplications().catch(() => {});
+        };
         document.addEventListener('contextmenu', onContextMenu, true);
-        return () => { document.removeEventListener('contextmenu', onContextMenu, true); };
+        document.addEventListener('mouseover', onMouseOver);
+        return () => {
+          document.removeEventListener('contextmenu', onContextMenu, true);
+          document.removeEventListener('mouseover', onMouseOver);
+        };
       }, [menu]);
       const open = state.open === true;
       const notice = state.notice;
