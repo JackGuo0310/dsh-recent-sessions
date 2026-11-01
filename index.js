@@ -116,12 +116,20 @@ async function copyFileToClipboard(request) {
  */
 export function apply(ctx) {
   ctx.inject(['connection'], (scope) => {
-    scope.connection.fetch.register({
-      path: COPY_FILE_PATH,
-      methods: ['POST'],
-      requestBody: 'buffered',
-      fetch: (request) => copyFileToClipboard(request),
-    });
+    try {
+      scope.connection.fetch.register({
+        path: COPY_FILE_PATH,
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: (request) => copyFileToClipboard(request),
+      });
+    } catch (error) {
+      // A composition whose Connection service serves routes differently must not
+      // take the whole plugin down: the Client half still runs the sidebar, the
+      // settings page and every other menu entry, and only 「复制文件」 reports a
+      // failure when clicked.
+      console.warn('dsh-recent-sessions: clipboard route not registered:', error);
+    }
   });
 }
 

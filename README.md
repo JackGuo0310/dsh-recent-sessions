@@ -83,7 +83,7 @@
 ## 安装
 
 ```
-dsh plugin --profile <profile> add github:JackGuo0310/dsh-recent-sessions#v0.5.7
+dsh plugin --profile <profile> add github:JackGuo0310/dsh-recent-sessions#v0.5.8
 ```
 
 安装后重启 DSH。左侧栏工作区下方即出现「最近」分组；设置在 设置 →「最近会话」；助手回复里的文件引用可以右键。

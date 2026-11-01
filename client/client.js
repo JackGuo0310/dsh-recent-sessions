@@ -64,8 +64,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.7",
-    "describe": "v0.5.7",
+    "tag": "v0.5.8",
+    "describe": "v0.5.8",
     "commit": null
   }
 );
