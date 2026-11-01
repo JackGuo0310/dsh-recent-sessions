@@ -64,8 +64,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.8",
-    "describe": "v0.5.8",
+    "tag": "v0.5.9",
+    "describe": "v0.5.9",
     "commit": null
   }
 );
@@ -1555,6 +1555,22 @@ const VERSION_META = Object.freeze(
       };
 
       /**
+       * Whether this page talks to the Host over loopback — the browser and the
+       * Host are the same machine. The Client Remote publishes that answer with
+       * the host facts; only then does an OS clipboard write land in the user's
+       * own clipboard rather than the Host's.
+       * @returns {boolean} true for a local page, false for a remote one.
+       */
+      function isLocalPage() {
+        const remote = service('remote');
+        try {
+          return remote?.$host?.isLoopback === true;
+        } catch {
+          return false;
+        }
+      }
+
+      /**
        * Whether the Host can hand a path to its desktop, read once per connection.
        * @returns {Promise<boolean>} the Host's answer, false when it cannot ask.
        */
@@ -1646,6 +1662,7 @@ const VERSION_META = Object.freeze(
           absolutePath,
           desktop: canUseDesktop,
           sidebar: sidebarRight !== undefined && typeof sidebarRight.openResource === 'function',
+          local: isLocalPage(),
         };
       }
 
@@ -2077,11 +2094,16 @@ const VERSION_META = Object.freeze(
         label: t('file.copyContents'),
         icon: jsx(IconDeliverDocRegular, {}),
       });
-      items.push({
-        id: FILE_MENU_ITEMS.copyFile,
-        label: t('file.copyFile'),
-        icon: jsx(IconPaperclipOutlineRegular, {}),
-      });
+      // 「复制文件」 writes the Host's OS clipboard, which is only the user's own
+      // clipboard while the page and the Host are the same machine. A remote page
+      // gets no entry at all; 「另存为…」 already brings the file over.
+      if (resolved.local === true) {
+        items.push({
+          id: FILE_MENU_ITEMS.copyFile,
+          label: t('file.copyFile'),
+          icon: jsx(IconPaperclipOutlineRegular, {}),
+        });
+      }
       return items;
     }
 
