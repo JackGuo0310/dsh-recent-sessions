@@ -64,8 +64,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.9",
-    "describe": "v0.5.9",
+    "tag": "v0.5.10",
+    "describe": "v0.5.10",
     "commit": null
   }
 );
@@ -505,16 +505,42 @@ const VERSION_META = Object.freeze(
 
     /**
      * One recent-session row.
-     * @param {object} props - row facts, status, selection, actions and translator.
+     *
+     * Right-click is the shipped Harness menu, not a second one: the shipped
+     * workspace Session rows hand the unified context-menu trigger a captured
+     * `{ kind: 'session' }` target, so this row does the same and gets the exact
+     * same contributions (pin, rename, fork, copy Session id, archive) with the
+     * shipped placement, keyboard walk and dismissal. The row is a div, so the
+     * trigger's `tabIndex` / `onContextMenu` / `onKeyDown` props are spread onto
+     * it directly; Enter and Space fall back to the row's own activation.
+     *
+     * Compositions older than the unified menu provide no `useContextMenu`, so
+     * the row degrades to exactly its previous behaviour.
+     * @param {object} props - row facts, status, selection, actions, context-menu
+     *   factory and translator.
      * @returns {object} the row element.
      */
-    function RecentRow({ row, status, selected, onOpen, onTogglePin, actions, t }) {
+    function RecentRow({ row, status, selected, onOpen, onTogglePin, actions, useContextMenu, t }) {
       const statuses = sessionStatuses(status, t);
       const primary = statuses[0];
       const project = row.workspaceLabel;
       const pinned = row.pinned === true;
       const [menuOpen, setMenuOpen] = useState(false);
       const label = displayTitle(row.title, t);
+      /** Enter/Space activation; also the trigger's own key hook. */
+      const activate = (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onOpen(row.id);
+      };
+      // `defaultTitle` is the raw title, as the shipped rows pass it: the shipped
+      // rename contribution seeds its dialog from this value, not the display form.
+      const contextMenuProps = useContextMenu === undefined
+        ? { onKeyDown: activate }
+        : useContextMenu().getTriggerProps(
+          { kind: 'session', value: { sessionId: row.id, displayTitle: row.title } },
+          { onKeyDown: activate },
+        );
       // The strip's own visibility is driven by this class, not by :hover alone:
       // the popup portals out of the row, so the pointer leaves it while the menu
       // is still up and the anchor has to survive that.
@@ -529,11 +555,7 @@ const VERSION_META = Object.freeze(
         'aria-current': selected ? 'true' : undefined,
         'aria-description': project === '' ? undefined : t('row.project', { name: project }),
         onClick: () => onOpen(row.id),
-        onKeyDown: (event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          event.preventDefault();
-          onOpen(row.id);
-        },
+        ...contextMenuProps,
         children: [
           jsx('span', { key: 'slot', className: 'dshRecent_slot', children: jsx(StatusCell, { statuses }) }),
           jsx('span', { key: 'title', className: 'dshRecent_title', children: label }),
@@ -714,10 +736,11 @@ const VERSION_META = Object.freeze(
 
     /**
      * The 「最近」 section contributed to the sidebar foot.
-     * @param {object} props - slot props: owner share, standard hooks, injected actions.
+     * @param {object} props - slot props: owner share, standard hooks (including
+     *   the shipped `useContextMenu` factory), injected actions and translator.
      * @returns {object | null} the section element, or null in the collapsed rail.
      */
-    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, actions, t }) {
+    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, useContextMenu, openSession, actions, t }) {
       const [expanded, setExpanded] = useState(true);
       const [limit, setLimit] = useState(null);
       const [sort, setSort] = useState('updated');
@@ -868,6 +891,7 @@ const VERSION_META = Object.freeze(
               onOpen,
               onTogglePin,
               actions,
+              useContextMenu,
               t,
             })),
           }),
