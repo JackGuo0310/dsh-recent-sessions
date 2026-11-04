@@ -40,13 +40,10 @@ window.__ModuleLoader__.load({
       IconAppsAddOutlineRegular,
       IconArchiveOutlineRegular,
       IconBranchOutlineRegular,
-      IconBrowseOutlineRegular,
       IconCopyOutlineRegular,
       IconDeliverDocRegular,
-      IconDownloadOutlineRegular,
       IconEditOutlineRegular,
       IconEllipsisOutlineRegular,
-      IconPanelLeftOutlineRegular,
       IconPaperclipOutlineRegular,
       IconPinFillRegular,
       IconPinOutlineRegular,
@@ -55,7 +52,6 @@ window.__ModuleLoader__.load({
       Menu,
       MenuItemButton,
       Modal,
-      Toast,
       Tooltip,
       writeClipboard,
     } = require('@deepseek-ai/dsh-client-ui-primitives');
@@ -64,8 +60,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.10",
-    "describe": "v0.5.10",
+    "tag": "v0.5.11",
+    "describe": "v0.5.11",
     "commit": null
   }
 );
@@ -204,7 +200,6 @@ const VERSION_META = Object.freeze(
       '.dshRecentPage_save{border:1px solid transparent;border-radius:var(--dsw-radius-md);padding:5px 14px;font:inherit;font-size:13px;line-height:1.5;cursor:pointer;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}',
       '.dshRecentPage_save:disabled{opacity:.4;cursor:default}',
       '.dshRecentPage_save:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
-      '.dshRecent_appIcon{width:14px;height:14px;object-fit:contain;border-radius:2px}',
     ].join('');
 
     /**
@@ -506,41 +501,50 @@ const VERSION_META = Object.freeze(
     /**
      * One recent-session row.
      *
-     * Right-click is the shipped Harness menu, not a second one: the shipped
-     * workspace Session rows hand the unified context-menu trigger a captured
-     * `{ kind: 'session' }` target, so this row does the same and gets the exact
-     * same contributions (pin, rename, fork, copy Session id, archive) with the
-     * shipped placement, keyboard walk and dismissal. The row is a div, so the
-     * trigger's `tabIndex` / `onContextMenu` / `onKeyDown` props are spread onto
-     * it directly; Enter and Space fall back to the row's own activation.
+     * Right-click opens this row's own 「⋯」 menu at the pointer rather than the
+     * shipped Harness Session menu. The two look alike, but their pin entries act
+     * on different ledgers: the shipped Session menu pins in the Host's workspace
+     * ledger, while this section's pin is its own local ordering preference. A
+     * right-click that pinned in one ledger while the row's pin button picked the
+     * other would let the same row show two contradictory pin states, so the row
+     * reuses its one menu for both gestures — same entries, same pin, same
+     * dismissal and keyboard walk.
      *
-     * Compositions older than the unified menu provide no `useContextMenu`, so
-     * the row degrades to exactly its previous behaviour.
-     * @param {object} props - row facts, status, selection, actions, context-menu
-     *   factory and translator.
+     * The menu is the shipped `Menu` primitive, so a right-click is positioned
+     * through its `getAnchorRect` the way the file menu positions at a pointer
+     * point; opening from 「⋯」 keeps the default measurement of that button.
+     * @param {object} props - row facts, status, selection, actions and translator.
      * @returns {object} the row element.
      */
-    function RecentRow({ row, status, selected, onOpen, onTogglePin, actions, useContextMenu, t }) {
+    function RecentRow({ row, status, selected, onOpen, onTogglePin, actions, t }) {
       const statuses = sessionStatuses(status, t);
       const primary = statuses[0];
       const project = row.workspaceLabel;
       const pinned = row.pinned === true;
       const [menuOpen, setMenuOpen] = useState(false);
+      // Pointer spot a right-click opened the menu at; null while 「⋯」 owns it.
+      const [menuPoint, setMenuPoint] = useState(null);
+      const rowRef = useRef(null);
       const label = displayTitle(row.title, t);
-      /** Enter/Space activation; also the trigger's own key hook. */
-      const activate = (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+      /**
+       * Open the row menu where a right-click landed.
+       *
+       * A keyboard-raised `contextmenu` reports no point, so the menu hangs off
+       * the row's lower edge — the same fallback the file menu uses. The row takes
+       * the focus so closing the menu hands it back here rather than to the body.
+       * @param {object} event - the row's `contextmenu` event.
+       */
+      const openContextMenu = (event) => {
         event.preventDefault();
-        onOpen(row.id);
+        event.stopPropagation();
+        const keyboard = event.clientX === 0 && event.clientY === 0;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        setMenuPoint(keyboard
+          ? { x: bounds.left, y: bounds.bottom }
+          : { x: event.clientX, y: event.clientY });
+        setMenuOpen(true);
+        event.currentTarget.focus({ preventScroll: true });
       };
-      // `defaultTitle` is the raw title, as the shipped rows pass it: the shipped
-      // rename contribution seeds its dialog from this value, not the display form.
-      const contextMenuProps = useContextMenu === undefined
-        ? { onKeyDown: activate }
-        : useContextMenu().getTriggerProps(
-          { kind: 'session', value: { sessionId: row.id, displayTitle: row.title } },
-          { onKeyDown: activate },
-        );
       // The strip's own visibility is driven by this class, not by :hover alone:
       // the popup portals out of the row, so the pointer leaves it while the menu
       // is still up and the anchor has to survive that.
@@ -548,6 +552,7 @@ const VERSION_META = Object.freeze(
       if (selected) rowClass.push('dshRecent_rowSelected');
       if (menuOpen) rowClass.push('dshRecent_rowMenuOpen');
       return jsxs('div', {
+        ref: rowRef,
         className: rowClass.join(' '),
         role: 'listitem',
         tabIndex: 0,
@@ -555,7 +560,12 @@ const VERSION_META = Object.freeze(
         'aria-current': selected ? 'true' : undefined,
         'aria-description': project === '' ? undefined : t('row.project', { name: project }),
         onClick: () => onOpen(row.id),
-        ...contextMenuProps,
+        onContextMenu: openContextMenu,
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onOpen(row.id);
+        },
         children: [
           jsx('span', { key: 'slot', className: 'dshRecent_slot', children: jsx(StatusCell, { statuses }) }),
           jsx('span', { key: 'title', className: 'dshRecent_title', children: label }),
@@ -587,15 +597,35 @@ const VERSION_META = Object.freeze(
               jsx(Menu, {
                 key: 'menu',
                 open: menuOpen,
-                onClose: () => { setMenuOpen(false); },
+                onClose: () => {
+                  setMenuOpen(false);
+                  setMenuPoint(null);
+                },
                 portal: true,
                 closeOnPointerLeave: true,
+                // A right-click menu is a pointer-positioned popup, so it takes
+                // the keyboard (the first row) and gives it back to the row; the
+                // 「⋯」 trigger keeps its default anchor measurement and focus
+                // hand-back.
+                autoFocus: menuPoint !== null,
+                getAnchorRect: menuPoint === null ? undefined : () => ({
+                  left: menuPoint.x,
+                  top: menuPoint.y,
+                  right: menuPoint.x,
+                  bottom: menuPoint.y,
+                  width: 0,
+                  height: 0,
+                }),
+                returnFocus: menuPoint === null ? undefined : () => rowRef.current,
                 anchor: jsx('button', {
                   type: 'button',
                   className: 'dshRecent_actionButton',
                   'aria-label': t('row.menu.aria', { name: label }),
                   'aria-expanded': menuOpen ? 'true' : 'false',
-                  onClick: () => { setMenuOpen((open) => !open); },
+                  onClick: () => {
+                    setMenuPoint(null);
+                    setMenuOpen((open) => !open);
+                  },
                   children: jsx(IconEllipsisOutlineRegular, {}),
                 }),
                 children: jsxs(Fragment, { children: [
@@ -736,11 +766,10 @@ const VERSION_META = Object.freeze(
 
     /**
      * The 「最近」 section contributed to the sidebar foot.
-     * @param {object} props - slot props: owner share, standard hooks (including
-     *   the shipped `useContextMenu` factory), injected actions and translator.
+     * @param {object} props - slot props: owner share, standard hooks, injected actions.
      * @returns {object | null} the section element, or null in the collapsed rail.
      */
-    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, useContextMenu, openSession, actions, t }) {
+    function RecentSessionsSection({ wide, useSessions, useSessionStatus, useWorkspaces, usePreference, openSession, actions, t }) {
       const [expanded, setExpanded] = useState(true);
       const [limit, setLimit] = useState(null);
       const [sort, setSort] = useState('updated');
@@ -891,7 +920,6 @@ const VERSION_META = Object.freeze(
               onOpen,
               onTogglePin,
               actions,
-              useContextMenu,
               t,
             })),
           }),
@@ -1322,165 +1350,98 @@ const VERSION_META = Object.freeze(
     // -------------------------------------------------------- file references
 
     /**
-     * Right-click menu over the file references an assistant reply renders — the
-     * inline `@path` mention, the Markdown file link, the delivered-file card and
-     * the rows of the changed-files card.
+     * The file entries this plugin contributes to the harness's one shared
+     * context menu, rather than drawing a second menu of its own.
      *
-     * This is the shipped menu, not a second one: `Menu` and its item rows are
-     * the ui-primitives components the workspace menus already mount, so placement,
-     * the viewport-edge clamp, the keyboard walk, Escape, outside-click dismissal
-     * and the focus hand-back are the shipped behaviour rather than reimplemented
-     * here. The entries are the shipped file actions: native open and reveal
-     * through the Session Remote (`openWorkspacePath` — the call the document
-     * preview's own file control makes), opening the file in the right Sidebar
-     * through its resource page, and bounded reads through the `workspaceFiles`
-     * Remote for the copy and save entries.
+     * The shipped 0.2.2 context menu already renders what these reference
+     * surfaces need — 在侧栏打开 / 在浮窗打开 / 在资源管理器中显示 / 打开（默认
+     * 应用）/ 复制路径 / 另存为 — and its trigger is attached to the inline
+     * `@path` mention, the Markdown file link and the delivered-file card. What it
+     * does not carry is this plugin's three extras, so exactly those are
+     * contributed here:
      *
-     * What disappears and what can only be disabled:
+     *   - 「打开方式」: a submenu over the Host's registered applications for the
+     *     file, the default handler marked. The shipped entry opens the default
+     *     application only; this one lets the user pick.
+     *   - 「复制文件内容」: a complete-file read through the `workspaceFiles`
+     *     Remote, decoded as UTF-8 and copied as text.
+     *   - 「复制文件」: the Host-side OS clipboard write, offered only when this
+     *     page and the Host are the same machine (loopback), which is the only
+     *     case where both share a clipboard.
      *
-     *   - A Host without a desktop (a remote Session, a headless deployment)
-     *     cannot run a native opener at all, so those entries are absent rather
-     *     than disabled.
-     *   - A reference the Host's file service can no longer resolve leaves every
-     *     entry that would act on the file disabled, while 「复制路径」 keeps
-     *     copying the resolved path.
-     *
-     * A left click is untouched: this module only inspects `contextmenu`, and the
-     * shipped click handler keeps owning the reference itself.
+     * Everything visual is the shared popup's: placement, viewport clamping,
+     * keyboard walk, dismissal, shortcut display and toast feedback. A reference
+     * the Host can no longer resolve contributes nothing at all; the shipped
+     * 「复制路径」 keeps working because it resolves the path itself.
      */
 
-    /** Shipped file-reference surfaces; CSS-module class names keep their local name. */
-    const FILE_MENTION_SELECTOR = 'button[class*="fileMention"]';
-    const PRESENTED_FILE_SELECTOR = '[data-presented-file]';
+    /** Shipped changed-files card; its rows carry no unified-menu trigger. */
     const CHANGED_FILES_SELECTOR = '[data-changed-files]';
 
-    /** Menu ids, stable across renders so the shipped row highlight keeps working. */
-    const FILE_MENU_ITEMS = {
-      open: 'open',
-      reveal: 'reveal',
-      sidebar: 'sidebar',
-      openWith: 'openWith',
-      saveAs: 'saveAs',
-      copyPath: 'copyPath',
-      copyContents: 'copyContents',
-      copyFile: 'copyFile',
-    };
+    /** Icon keys this plugin registers with the shared popup. */
+    const FILE_ICON_OPEN_WITH = 'recent-sessions.openWith';
+    const FILE_ICON_COPY_CONTENTS = 'recent-sessions.copyContents';
+    const FILE_ICON_COPY_FILE = 'recent-sessions.copyFile';
+    const FILE_ICON_APPLICATION = 'recent-sessions.application';
 
     /**
-     * Whether one reference is already rooted — a Windows drive path, a UNC share
-     * or a POSIX absolute path — and therefore must not be joined to the workspace.
-     * @param {string} path - reference as the reply rendered it.
-     * @returns {boolean} whether the path is absolute.
+     * Application image for one 「打开方式」 row, or the native-open glyph when
+     * the Host returned no icon. The shared popup renders this through the
+     * `contextMenu.icon` slot, handing it the captured icon metadata.
+     * @param {object} props - icon metadata (`src` optional).
+     * @returns {object} the image, or the fallback glyph.
      */
-    function isRootedPath(path) {
-      return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('/');
-    }
-
-    /**
-     * Resolve one workspace-relative reference against the Session's workspace root.
-     * @param {string | undefined} root - Session workspace root.
-     * @param {string} path - reference as the reply rendered it.
-     * @returns {string} rooted candidate path.
-     */
-    function rootedPath(root, path) {
-      if (isRootedPath(path)) return path;
-      if (root === undefined || root === '') return path;
-      const separator = root.includes('\\') ? '\\' : '/';
-      return `${root.replace(/[\\/]+$/, '')}${separator}${path.replace(/^(?:\.?[\\/])+/, '')}`;
-    }
-
-    /**
-     * Encode one `dsh-resource://file/…` path segment, keeping a drive letter's
-     * colon literal the way the shipped address helpers do.
-     * @param {string} segment - one path or identity segment.
-     * @returns {string} the encoded segment.
-     */
-    function encodeSegment(segment) {
-      return encodeURIComponent(segment).replace(/%3A/gi, ':');
-    }
-
-    /**
-     * Encode a `/`-separated path segment by segment.
-     * @param {string} path - slash-separated path.
-     * @returns {string} the encoded path.
-     */
-    function encodePath(path) {
-      return path.split('/').map(encodeSegment).join('/');
-    }
-
-    /**
-     * Build the right Sidebar's `file` address for one Host path. A path inside
-     * the Session workspace is addressed workspace-relative; anything else keeps
-     * its absolute spelling, which the resource provider resolves as-is.
-     * @param {object} session - Session identity and workspace root.
-     * @param {string} absolutePath - Host path the file service resolved.
-     * @returns {string} the `dsh-resource://file/…` address.
-     */
-    function fileAddress(session, absolutePath) {
-      const normalized = absolutePath.replace(/\\/g, '/');
-      const root = session.cwd === undefined ? '' : session.cwd.replace(/\\/g, '/').replace(/\/+$/, '');
-      let path = normalized;
-      if (root !== '' && (normalized === root || normalized.startsWith(`${root}/`))) {
-        path = normalized === root ? '' : normalized.slice(root.length + 1);
+    function ApplicationIcon({ icon }) {
+      if (icon !== undefined && typeof icon.src === 'string' && icon.src !== '') {
+        return jsx('img', { src: icon.src, width: 14, height: 14, alt: '' });
       }
-      return `dsh-resource://file/session/${encodeSegment(session.sessionId)}/${encodePath(path.replace(/^(?:\.\/)+/, ''))}`;
+      return jsx(IconRightUpOutlineRegular, {});
     }
 
     /**
-     * Read the file reference one contextmenu event landed on.
+     * Read the changed-file row one contextmenu event landed on.
      *
-     * The shipped surfaces expose the path they would open: inline mentions and
-     * Markdown file links carry it in `title`, a delivered-file card's preview
-     * button does too, and a changed-file row names it in the hidden description
-     * the row points at. A reference without one is left to the browser menu.
+     * The shipped card's rows are buttons whose hidden description names the
+     * path; unlike the mention and link surfaces they carry no unified-menu
+     * trigger, so this plugin still has to raise the shared popup for them.
      * @param {EventTarget | null} target - the event target.
-     * @returns {{ path: string, element: Element } | null} the reference, or none.
+     * @returns {{ path: string, element: Element } | null} the row, or none.
      */
-    function readFileReference(target) {
+    function readChangedFileReference(target) {
       const origin = target instanceof Element
         ? target
         : target instanceof Node ? target.parentElement : null;
       if (origin === null) return null;
-      const mention = origin.closest(FILE_MENTION_SELECTOR);
-      if (mention !== null) {
-        const path = mention.getAttribute('title');
-        if (path !== null && path !== '') return { path, element: mention };
-      }
-      const presented = origin.closest(PRESENTED_FILE_SELECTOR);
-      if (presented !== null) {
-        const path = presented.querySelector('button[title]')?.getAttribute('title');
-        if (path !== null && path !== undefined && path !== '') return { path, element: presented };
-      }
-      const changed = origin.closest(CHANGED_FILES_SELECTOR);
-      if (changed !== null) {
-        const row = origin.closest('button[aria-describedby]');
-        const described = row === null ? undefined : row.getAttribute('aria-describedby')?.split(/\s+/)[0];
-        const path = described === undefined || described === ''
-          ? null
-          : document.getElementById(described)?.textContent?.trim();
-        if (row !== null && changed.contains(row) && path !== null && path !== undefined && path !== '') {
-          return { path, element: row };
-        }
-      }
-      return null;
+      const card = origin.closest(CHANGED_FILES_SELECTOR);
+      if (card === null) return null;
+      const row = origin.closest('button[aria-describedby]');
+      if (row === null || !card.contains(row)) return null;
+      const described = row.getAttribute('aria-describedby')?.split(/\s+/)[0];
+      const path = described === undefined || described === ''
+        ? null
+        : document.getElementById(described)?.textContent?.trim();
+      return path === null || path === undefined || path === ''
+        ? null
+        : { path, element: row };
     }
 
     /**
-     * State and actions of the file-reference menu.
+     * Register this plugin's three file entries on the harness's shared menu.
      *
-     * The menu lives outside the Session-scoped slot tree, in `shell.overlay`,
-     * because that is the sanctioned top layer for frame-wide surfaces. The
-     * Session facts its actions need — workspace root and identity — are only
-     * rendered inside a Session, so the bridge below publishes them here and the
-     * newest mount names the Session the menu acts on.
-     * @param {object} ctx - Client Cordis context.
+     * Runs inside `ctx.inject(['contextMenus'])`, so a composition without the
+     * unified menu simply never contributes them.
+     * @param {object} ctx - Client Cordis context, for the Remote services.
+     * @param {object} scope - injected scope that carries `contextMenus`.
      * @param {{ current: Function }} translate - the live namespace translator.
-     * @returns {object} the menu controller.
      */
-    function createFileMenu(ctx, translate) {
+    function registerFileContextMenu(ctx, scope, translate) {
+      const menus = scope.contextMenus;
+      /** Localized text through the namespace translator. */
+      const t = (key, params) => translate.current(key, params);
+
       /**
-       * Read one Client service without making it a plugin dependency: the file
-       * entries simply stay disabled in a composition that does not serve it.
+       * Read one Client service without making it a plugin dependency: the
+       * contributed entry stays absent in a composition that does not serve it.
        * @param {string} name - exact Client service name.
        * @returns {any} the service, or undefined.
        */
@@ -1491,729 +1452,345 @@ const VERSION_META = Object.freeze(
           return undefined;
         }
       };
-      /** Localized text through the namespace translator. */
-      const t = (key, params) => translate.current(key, params);
+      /** Session Remote: native open and file associations. */
+      const sessionRemote = () => service('remote.session') ?? service('remote')?.session;
+      /** Workspace file Remote: stat and bounded reads. */
+      const fileRemote = () => service('remote.workspaceFiles') ?? service('remote')?.workspaceFiles;
 
-      /** Closed-menu state; replaced, never mutated, so the snapshot stays comparable. */
-      const CLOSED = Object.freeze({
-        open: false,
-        pending: false,
-        resolved: null,
-        target: null,
-        session: null,
-        anchor: null,
-        notice: null,
-        apps: null,
-      });
-      let snapshot = CLOSED;
-      const listeners = new Set();
-      /** Mounted bridges, oldest first; the newest one names the Session to act on. */
-      const bridges = [];
-      /** Inspection generation: a newer open, or a close, retires an older answer. */
-      let generation = 0;
-      /** Cached native-desktop answer: null while unknown, otherwise a boolean. */
-      let desktop = null;
-      /**
-       * Associations already read per Session path. The 「打开方式」 list is the
-       * one expensive host read (Windows enumerates registered handlers), so it
-       * is fetched when that entry is first expanded rather than on open, and a
-       * later right-click on the same file reuses the answer.
-       */
-      const applicationsCache = new Map();
-
-      /** Notify every subscription of a state change. */
-      const emit = () => {
-        for (const listener of listeners) listener();
-      };
-
-      /**
-       * Publish one state patch and notify subscribers.
-       * @param {object} patch - fields to replace.
-       */
-      const publish = (patch) => {
-        snapshot = { ...snapshot, ...patch };
-        emit();
-      };
-
-      /**
-       * Observe menu state.
-       * @param {Function} listener - notified on every published change.
-       * @returns {() => void} unsubscribe.
-       */
-      const subscribe = (listener) => {
-        listeners.add(listener);
-        return () => { listeners.delete(listener); };
-      };
-
-      /**
-       * Read menu state.
-       * @returns {object} the current immutable snapshot.
-       */
-      const getSnapshot = () => snapshot;
-
-      /**
-       * Publish one Session's facts from a mounted bridge.
-       * @param {object} session - Session identity and workspace root.
-       * @returns {() => void} detach, used by the bridge's effect cleanup.
-       */
-      function attach(session) {
-        const token = { session };
-        bridges.push(token);
-        return () => {
-          const at = bridges.indexOf(token);
-          if (at !== -1) bridges.splice(at, 1);
-        };
-      }
-
-      /** The Session the menu acts on, or null when no bridge is mounted. */
-      const currentSession = () => (bridges.length === 0 ? null : bridges[bridges.length - 1].session);
-
-      /**
-       * Anchor rectangle for the shipped `Menu`: a zero-size box at the pointer,
-       * which is then clamped against the window edges by the primitive itself.
-       * @returns {object} the rectangle `Menu` positions against.
-       */
-      const anchorRect = () => {
-        const point = snapshot.anchor ?? { x: 0, y: 0 };
-        return { left: point.x, top: point.y, right: point.x, bottom: point.y, width: 0, height: 0 };
+      /** Publish one settled action's feedback through the shared toast. */
+      const notify = (text, success) => {
+        try {
+          menus.notify(text, success);
+        } catch {
+          // Feedback is a courtesy; a missing overlay must not fail the action.
+        }
       };
 
       /**
        * Whether this page talks to the Host over loopback — the browser and the
-       * Host are the same machine. The Client Remote publishes that answer with
-       * the host facts; only then does an OS clipboard write land in the user's
-       * own clipboard rather than the Host's.
-       * @returns {boolean} true for a local page, false for a remote one.
+       * Host are the same machine, so the Host's OS clipboard is the user's own.
+       * @returns {boolean} true for a local page.
        */
       function isLocalPage() {
-        const remote = service('remote');
         try {
-          return remote?.$host?.isLoopback === true;
+          return service('remote')?.$host?.isLoopback === true;
         } catch {
           return false;
         }
       }
 
       /**
-       * Whether the Host can hand a path to its desktop, read once per connection.
-       * @returns {Promise<boolean>} the Host's answer, false when it cannot ask.
+       * Resolve one reference to the Host's absolute path.
+       * @param {string} sessionId - Session whose workspace resolves the path.
+       * @param {string} path - reference as the reply rendered it.
+       * @param {AbortSignal} signal - abort signal of this menu preparation.
+       * @returns {Promise<string | undefined>} the absolute path, or undefined.
        */
-      async function desktopAvailable() {
-        if (desktop !== null) return desktop;
-        const remote = service('remote.session') ?? service('remote')?.session;
-        if (remote === undefined || typeof remote.canOpenWorkspacePath !== 'function') return false;
+      async function absolutePathOf(sessionId, path, signal) {
+        const files = fileRemote();
+        if (files === undefined || typeof files.stat !== 'function' || sessionId === undefined) return undefined;
         try {
-          const result = await remote.canOpenWorkspacePath();
-          desktop = result?.ok === true && result.value === true;
+          const result = await files.stat(sessionId, path, signal);
+          return result?.ok === true ? result.value?.absolutePath : undefined;
         } catch {
-          desktop = false;
+          signal.throwIfAborted();
+          return undefined;
         }
-        return desktop;
       }
 
       /**
-       * Read one complete regular file through the workspace file service.
-       *
-       * The service refuses (rather than truncates) a file above the Host's
-       * complete-file cap, so the refusal code travels back with the result and
-       * the caller can say why nothing was copied.
-       * @param {object} session - Session identity.
-       * @param {string} path - rooted path the Host resolved.
-       * @returns {Promise<{ data: Uint8Array | null, code: string | null }>} bytes, or the failure code.
+       * Whether the Host can hand a path to its own desktop.
+       * @param {AbortSignal} signal - abort signal of this menu preparation.
+       * @returns {Promise<boolean>} the Host's answer.
        */
-      async function readFile(session, path) {
-        const workspaces = service('remote.workspaceFiles') ?? service('remote')?.workspaceFiles;
-        if (workspaces === undefined || typeof workspaces.readBytes !== 'function') {
-          return { data: null, code: 'unavailable' };
-        }
-        if (session.sessionId === undefined) return { data: null, code: 'unavailable' };
+      async function desktopAvailable(signal) {
+        const remote = sessionRemote();
+        if (remote === undefined || typeof remote.canOpenWorkspacePath !== 'function') return false;
         try {
-          const result = await workspaces.readBytes(session.sessionId, path, {});
-          if (result?.ok !== true) return { data: null, code: result?.error?.code ?? 'failed' };
-          const data = result.value?.data;
-          return data instanceof Uint8Array
-            ? { data, code: null }
-            : { data: null, code: 'failed' };
+          const result = await remote.canOpenWorkspacePath(signal);
+          return result?.ok === true && result.value === true;
         } catch {
-          return { data: null, code: 'failed' };
+          signal.throwIfAborted();
+          return false;
+        }
+      }
+
+      /**
+       * Read the Host's registered applications for one file.
+       * @param {string} absolutePath - Host path the file service resolved.
+       * @param {AbortSignal} signal - abort signal of this menu preparation.
+       * @returns {Promise<Array<object>>} applications, empty when unavailable.
+       */
+      async function readApplications(absolutePath, signal) {
+        const remote = sessionRemote();
+        if (remote === undefined || typeof remote.workspacePathApplications !== 'function') return [];
+        try {
+          const result = await remote.workspacePathApplications({ path: absolutePath }, signal);
+          return result?.ok === true && Array.isArray(result.value) ? result.value : [];
+        } catch {
+          signal.throwIfAborted();
+          return [];
+        }
+      }
+
+      /**
+       * Open one file with one chosen application through the Session Remote.
+       * @param {string} absolutePath - Host path the file service resolved.
+       * @param {string} applicationId - identifier from the Host's association list.
+       * @returns {Promise<void>} after the outcome published.
+       */
+      async function openWithApplication(absolutePath, applicationId) {
+        const remote = sessionRemote();
+        let opened = false;
+        if (remote !== undefined && typeof remote.openWorkspacePath === 'function') {
+          try {
+            const result = await remote.openWorkspacePath({ path: absolutePath, application: applicationId });
+            opened = result?.ok === true;
+          } catch {
+            opened = false;
+          }
+        }
+        if (!opened) notify(t('file.openFailed'), false);
+      }
+
+      /**
+       * Copy the whole file's text. The complete-file read stays under the
+       * Host's cap; a non-UTF-8 or NUL-carrying body is reported, not copied.
+       * @param {string} sessionId - Session whose workspace resolves the path.
+       * @param {string} absolutePath - Host path the file service resolved.
+       * @returns {Promise<void>} after the outcome published.
+       */
+      async function copyContents(sessionId, absolutePath) {
+        const files = fileRemote();
+        if (files === undefined || typeof files.readBytes !== 'function') {
+          notify(t('file.copyFailed'), false);
+          return;
+        }
+        let data = null;
+        let code = 'failed';
+        try {
+          const result = await files.readBytes(sessionId, absolutePath, {});
+          if (result?.ok === true && result.value?.data instanceof Uint8Array) {
+            data = result.value.data;
+          } else {
+            code = result?.error?.code ?? 'failed';
+          }
+        } catch {
+          code = 'failed';
+        }
+        if (data === null) {
+          notify(t(code === 'workspace-file/too-large' ? 'file.tooLarge' : 'file.copyFailed'), false);
+          return;
+        }
+        let text;
+        try {
+          text = new TextDecoder('utf-8', { fatal: true }).decode(data);
+        } catch {
+          notify(t('file.notText'), false);
+          return;
+        }
+        if (text.includes('\u0000')) {
+          notify(t('file.notText'), false);
+          return;
+        }
+        try {
+          await writeClipboard(text);
+          notify(t('file.contentsCopied'), true);
+        } catch {
+          notify(t('file.copyFailed'), false);
         }
       }
 
       /**
        * Copy one file onto the Host machine's system clipboard as a file, through
        * the host half's authenticated route.
-       * @param {object} resolved - availability facts.
-       * @param {Element | null} anchor - element the notice points at.
-       * @returns {Promise<void>} after the notice published.
+       * @param {string} absolutePath - Host path the file service resolved.
+       * @returns {Promise<void>} after the outcome published.
        */
-      async function copyFileToClipboard(resolved, anchor) {
+      async function copyFileToClipboard(absolutePath) {
         let ok = false;
         try {
           const response = await fetch('api/recent-sessions.copy-file', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ path: resolved.absolutePath }),
+            body: JSON.stringify({ path: absolutePath }),
           });
           ok = response.ok;
         } catch {
           ok = false;
         }
-        notify(anchor, t(ok ? 'file.fileCopied' : 'file.copyFileFailed'), ok ? 'success' : 'error');
+        notify(t(ok ? 'file.fileCopied' : 'file.copyFileFailed'), ok);
       }
 
-      /**
-       * Resolve what one reference can currently do.
-       * @param {object} session - Session identity and workspace root.
-       * @param {string} path - reference as the reply rendered it.
-       * @returns {Promise<object>} availability facts for the item builder.
-       */
-      async function inspect(session, path) {
-        const workspaces = service('remote.workspaceFiles') ?? service('remote')?.workspaceFiles;
-        let stat = null;
-        if (workspaces !== undefined && typeof workspaces.stat === 'function' && session.sessionId !== undefined) {
-          try {
-            const result = await workspaces.stat(session.sessionId, path);
-            if (result?.ok === true) stat = result.value;
-          } catch {
-            stat = null;
-          }
+      // Icons for the three entries and the application rows. Registered through
+      // the same keyed slot the shipped features use, so the popup can render
+      // them without this plugin exporting React components.
+      scope.slots.inject('contextMenu.icon', function* registerFileIcons() {
+        for (const [key, Icon] of Object.entries({
+          [FILE_ICON_OPEN_WITH]: IconAppsAddOutlineRegular,
+          [FILE_ICON_COPY_CONTENTS]: IconDeliverDocRegular,
+          [FILE_ICON_COPY_FILE]: IconPaperclipOutlineRegular,
+        })) {
+          yield scope.slots.register({ name: 'contextMenu.icon', key }, Icon);
         }
-        const absolutePath = stat?.absolutePath ?? rootedPath(session.cwd, path);
-        const canUseDesktop = await desktopAvailable();
-        const sidebarRight = service('sidebarRight');
-        return {
-          stat,
-          absolutePath,
-          desktop: canUseDesktop,
-          sidebar: sidebarRight !== undefined && typeof sidebarRight.openResource === 'function',
-          local: isLocalPage(),
-        };
-      }
+        yield scope.slots.register({ name: 'contextMenu.icon', key: FILE_ICON_APPLICATION }, ApplicationIcon);
+      });
 
-      /**
-       * Cache key of one file's file associations.
-       * @param {object} session - Session identity.
-       * @param {string} absolutePath - Host path the file service resolved.
-       * @returns {string} the cache key.
-       */
-      function applicationsKey(session, absolutePath) {
-        return `${session.sessionId}\n${absolutePath}`;
-      }
-
-      /**
-       * Load the 「打开方式」 list for the open menu, once per file.
-       *
-       * The primitive has no hover callback for a submenu, so the shipped menu's
-       * submenu item starts with a loading row and this method is called when the
-       * overlay sees that row's trigger hovered (or when the row is clicked). A
-       * cached answer is published synchronously, so a second right-click on the
-       * same file never pays for the host read.
-       * @returns {Promise<void>} after the list or its failure is published.
-       */
-      async function loadApplications() {
-        const state = snapshot;
-        if (state.open !== true || state.resolved === null || state.session === null) return;
-        if (state.resolved.desktop !== true || state.resolved.stat === null) return;
-        const key = applicationsKey(state.session, state.resolved.absolutePath);
-        const cached = applicationsCache.get(key);
-        if (cached !== undefined) {
-          if (state.apps?.key !== key || state.apps.status !== 'ready') {
-            publish({ apps: { key, status: 'ready', list: cached } });
-          }
-          return;
-        }
-        if (state.apps?.key === key && (state.apps.status === 'loading' || state.apps.status === 'failed')) return;
-        publish({ apps: { key, status: 'loading', list: [] } });
-        const remote = service('remote.session') ?? service('remote')?.session;
-        let list = [];
-        let ok = false;
-        if (remote !== undefined && typeof remote.workspacePathApplications === 'function') {
-          try {
-            const result = await remote.workspacePathApplications({ path: state.resolved.absolutePath });
-            if (result?.ok === true && Array.isArray(result.value)) {
-              list = result.value;
-              ok = true;
-            }
-          } catch {
-            ok = false;
-          }
-        }
-        if (snapshot.open !== true || snapshot.apps?.key !== key) return;
-        if (!ok) {
-          publish({ apps: { key, status: 'failed', list: [] } });
-          return;
-        }
-        if (applicationsCache.size > 64) applicationsCache.clear();
-        applicationsCache.set(key, list);
-        publish({ apps: { key, status: 'ready', list } });
-      }
-
-      /**
-       * Open the menu for one reference.
-       * @param {{ path: string, element: Element }} reference - the reference clicked.
-       * @param {{ x: number, y: number }} point - viewport point of the click.
-       * @returns {boolean} whether this plugin took the event; false lets the browser show its menu.
-       */
-      function open(reference, point) {
-        const session = currentSession();
-        if (session === null) return false;
-        const id = ++generation;
-        publish({
-          open: true,
-          pending: true,
-          resolved: null,
-          target: reference,
-          session,
-          anchor: point,
-          notice: null,
-          apps: null,
-        });
-        inspect(session, reference.path).then((resolved) => {
-          if (id !== generation || snapshot.open !== true) return;
-          const key = applicationsKey(session, resolved.absolutePath);
-          const cached = applicationsCache.get(key);
-          publish({
-            pending: false,
-            resolved,
-            apps: resolved.desktop && resolved.stat !== null
-              ? { key, status: cached === undefined ? 'idle' : 'ready', list: cached ?? [] }
-              : null,
-          });
-        }, () => {
-          if (id !== generation || snapshot.open !== true) return;
-          publish({
-            pending: false,
-            resolved: {
-              stat: null,
-              absolutePath: rootedPath(session.cwd, reference.path),
-              desktop: false,
-              sidebar: false,
-            },
-            apps: null,
-          });
-        });
-        return true;
-      }
-
-      /** Retire the open menu, including any answer still in flight. */
-      function close() {
-        if (snapshot.open !== true) return;
-        generation += 1;
-        publish({ open: false, pending: false, resolved: null, target: null, session: null, apps: null });
-      }
-
-      /**
-       * Raise the shipped transient Toast for one settled action.
-       * @param {Element | null | undefined} anchor - element the notice points at.
-       * @param {string} text - already-localized notice.
-       * @param {string} tone - 'success' or 'error'.
-       */
-      function notify(anchor, text, tone) {
-        publish({
-          notice: {
-            id: snapshot.notice === null ? 1 : snapshot.notice.id + 1,
-            text,
-            tone,
-            anchor: anchor instanceof Element ? anchor : null,
-          },
-        });
-      }
-
-      /**
-       * Retire one transient notice once its Toast has finished.
-       * @param {number} id - notice identity.
-       */
-      function dismissNotice(id) {
-        if (snapshot.notice?.id === id) publish({ notice: null });
-      }
-
-      /**
-       * Forget the cached desktop answer and file associations when the connection
-       * generation changes.
-       */
-      function resetHostFacts() {
-        desktop = null;
-        applicationsCache.clear();
-      }
-
-      /**
-       * Copy a text value through the shipped clipboard primitive.
-       * @param {string} value - text to copy.
-       * @returns {Promise<boolean>} whether the browser accepted it.
-       */
-      async function copyText(value) {
-        try {
-          await writeClipboard(value);
-          return true;
-        } catch {
-          return false;
-        }
-      }
-
-      /**
-       * Run one entry's shipped action.
-       * @param {object} session - Session identity.
-       * @param {object} resolved - availability facts captured when the menu opened.
-       * @param {object} target - the reference the menu acts on.
-       * @param {string} id - selected menu item id.
-       * @param {Array<object>} applications - the 「打开方式」 list the item was built from.
-       * @returns {Promise<void>} after the action settled and its notice published.
-       */
-      async function run(session, resolved, target, id, applications) {
-        const remote = service('remote.session') ?? service('remote')?.session;
-        const anchor = target?.element ?? null;
-        if (id === FILE_MENU_ITEMS.copyPath) {
-          const copied = await copyText(resolved.absolutePath);
-          notify(anchor, t(copied ? 'file.pathCopied' : 'file.copyFailed'), copied ? 'success' : 'error');
-          return;
-        }
-        if (id === FILE_MENU_ITEMS.sidebar) {
-          const sidebarRight = service('sidebarRight');
-          if (sidebarRight === undefined || typeof sidebarRight.openResource !== 'function') {
-            notify(anchor, t('file.sidebarFailed'), 'error');
-            return;
-          }
-          try {
-            sidebarRight.openResource(fileAddress(session, resolved.absolutePath));
-          } catch {
-            notify(anchor, t('file.sidebarFailed'), 'error');
-          }
-          return;
-        }
-        if (id === FILE_MENU_ITEMS.saveAs) {
-          await saveCopy(session, resolved, anchor);
-          return;
-        }
-        if (id === FILE_MENU_ITEMS.copyContents) {
-          await copyContents(session, resolved, anchor);
-          return;
-        }
-        if (id === FILE_MENU_ITEMS.copyFile) {
-          await copyFileToClipboard(resolved, anchor);
-          return;
-        }
-        if (remote === undefined || typeof remote.openWorkspacePath !== 'function') {
-          notify(anchor, t('file.openFailed'), 'error');
-          return;
-        }
-        let request = { path: resolved.absolutePath };
-        if (id === FILE_MENU_ITEMS.reveal) request = { path: resolved.absolutePath, action: 'reveal' };
-        if (id.startsWith('app:')) {
-          const application = applications[Number(id.slice(4))];
-          if (application === undefined) return;
-          request = { path: resolved.absolutePath, application: application.id };
-        }
-        let opened = false;
-        try {
-          const result = await remote.openWorkspacePath(request);
-          opened = result?.ok === true;
-        } catch {
-          opened = false;
-        }
-        if (opened) return;
-        notify(anchor, t(id === FILE_MENU_ITEMS.reveal ? 'file.revealFailed' : 'file.openFailed'), 'error');
-      }
-
-      /**
-       * Copy the whole file's text. The complete-file read stays under the Host's
-       * cap, and a non-UTF-8 or NUL-carrying body is reported instead of copied.
-       * @param {object} session - Session identity.
-       * @param {object} resolved - availability facts.
-       * @param {Element | null} anchor - element the notice points at.
-       * @returns {Promise<void>} after the notice published.
-       */
-      async function copyContents(session, resolved, anchor) {
-        const read = await readFile(session, resolved.absolutePath);
-        if (read.data === null) {
-          notify(anchor, t(read.code === 'workspace-file/too-large' ? 'file.tooLarge' : 'file.copyFailed'), 'error');
-          return;
-        }
-        let text;
-        try {
-          text = new TextDecoder('utf-8', { fatal: true }).decode(read.data);
-        } catch {
-          notify(anchor, t('file.notText'), 'error');
-          return;
-        }
-        if (text.includes('\u0000')) {
-          notify(anchor, t('file.notText'), 'error');
-          return;
-        }
-        const copied = await copyText(text);
-        notify(anchor, t(copied ? 'file.contentsCopied' : 'file.copyFailed'), copied ? 'success' : 'error');
-      }
-
-      /**
-       * Save one copy of the file through the browser's save picker, falling back
-       * to a download when the picker is unavailable. The picker is opened first so
-       * its user gesture is still valid; a cancelled picker saves nothing.
-       * @param {object} session - Session identity.
-       * @param {object} resolved - availability facts.
-       * @param {Element | null} anchor - element the notice points at.
-       * @returns {Promise<void>} after the notice published.
-       */
-      async function saveCopy(session, resolved, anchor) {
-        const name = pathLabel(resolved.absolutePath);
-        let picker = null;
-        if (typeof window.showSaveFilePicker === 'function') {
-          try {
-            picker = await window.showSaveFilePicker({ suggestedName: name });
-          } catch (error) {
-            if (error?.name === 'AbortError') return;
-            picker = null;
-          }
-        }
-        const read = await readFile(session, resolved.absolutePath);
-        if (read.data === null) {
-          notify(anchor, t(read.code === 'workspace-file/too-large' ? 'file.tooLarge' : 'file.saveFailed'), 'error');
-          return;
-        }
-        if (picker !== null) {
-          try {
-            const stream = await picker.createWritable();
-            await stream.write(new Blob([read.data]));
-            await stream.close();
-            notify(anchor, t('file.saved'), 'success');
-          } catch {
-            notify(anchor, t('file.saveFailed'), 'error');
-          }
-          return;
-        }
-        const url = URL.createObjectURL(new Blob([read.data]));
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = name === '' ? 'download' : name;
-        link.rel = 'noopener';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => { URL.revokeObjectURL(url); }, 30_000);
-        notify(anchor, t('file.saved'), 'success');
-      }
-
-      /**
-       * Run the action one selected item names. The 「打开方式」 trigger row only
-       * loads the list and leaves the menu open, so its submenu can render it in
-       * place.
-       * @param {string} id - selected menu item id.
-       */
-      function select(id) {
-        if (id === 'apps-load') {
-          loadApplications().catch(() => {});
-          return;
-        }
-        const state = snapshot;
-        const { target, resolved, session } = state;
-        const applications = state.apps === null ? [] : state.apps.list;
-        close();
-        if (target === null || resolved === null || session === null) return;
-        run(session, resolved, target, id, applications).catch(() => {
-          notify(target.element ?? null, t('file.actionFailed'), 'error');
-        });
-      }
-
-      return {
-        subscribe,
-        getSnapshot,
-        attach,
-        open,
-        close,
-        select,
-        loadApplications,
-        anchorRect,
-        dismissNotice,
-        resetHostFacts,
-      };
-    }
-
-    /**
-     * Build the shipped menu's item array for the current state.
-     *
-     * Items are the `Menu` primitive's own `items` shape, so separators, the label
-     * row and the 打开方式 submenu are rendered by the shipped component.
-     * @param {object} state - the menu snapshot.
-     * @param {Function} t - namespace translator.
-     * @returns {Array<object>} menu items.
-     */
-    function fileMenuItems(state, t) {
-      const resolved = state.resolved;
-      if (state.pending === true || resolved === null) {
-        return [{ type: 'label', id: 'pending', text: t('file.loading') }];
-      }
-      const items = [];
-      if (resolved.stat === null) {
-        // The Host's file service answered with nothing: the reference is stale,
-        // so only the path itself is still meaningful.
-        items.push({ type: 'label', id: 'missing', text: t('file.missing') });
-        items.push({ type: 'separator', id: 'missing-separator' });
-        items.push({
-          id: FILE_MENU_ITEMS.copyPath,
-          label: t('file.copyPath'),
-          icon: jsx(IconCopyOutlineRegular, {}),
-        });
-        return items;
-      }
-      if (resolved.desktop) {
-        items.push({
-          id: FILE_MENU_ITEMS.open,
-          label: t('file.open'),
-          icon: jsx(IconRightUpOutlineRegular, {}),
-        });
-        items.push({
-          id: FILE_MENU_ITEMS.reveal,
-          label: t('file.reveal'),
-          icon: jsx(IconBrowseOutlineRegular, {}),
-        });
-      }
-      if (resolved.sidebar === true) {
-        items.push({
-          id: FILE_MENU_ITEMS.sidebar,
-          label: t('file.sidebar'),
-          icon: jsx(IconPanelLeftOutlineRegular, {}),
-        });
-      }
-      if (resolved.desktop && state.apps !== null) {
-        const apps = state.apps;
-        if (apps.status === 'ready' && apps.list.length > 0) {
-          items.push({
-            id: FILE_MENU_ITEMS.openWith,
+      // 「打开方式」: shown only on a desktop Host with at least one association.
+      // The application list is the one expensive read (Windows enumerates
+      // registered handlers), and the shipped open entry pays it too, so it is
+      // read while the popup prepares rather than deferred until the submenu
+      // expands.
+      scope.effect(() => menus.register({
+        id: 'recent-sessions.openWith',
+        target: 'file',
+        order: 150,
+        resolve: async ({ sessionId, path }, signal) => {
+          const absolutePath = await absolutePathOf(sessionId, path, signal);
+          signal.throwIfAborted();
+          if (absolutePath === undefined) return [];
+          if (!(await desktopAvailable(signal))) return [];
+          signal.throwIfAborted();
+          const applications = await readApplications(absolutePath, signal);
+          signal.throwIfAborted();
+          if (applications.length === 0) return [];
+          return [{
+            id: 'openWith',
             label: t('file.openWith'),
-            icon: jsx(IconAppsAddOutlineRegular, {}),
-            submenu: apps.list.map((application, index) => ({
+            icon: { key: FILE_ICON_OPEN_WITH },
+            children: applications.map((application, index) => ({
               id: `app:${index}`,
               label: application.default === true
                 ? t('file.defaultApp', { name: application.name })
                 : application.name,
-              icon: typeof application.icon === 'string' && application.icon !== ''
-                ? jsx('img', { src: application.icon, alt: '', className: 'dshRecent_appIcon' })
-                : undefined,
+              ...(typeof application.icon === 'string' && application.icon !== ''
+                ? { icon: { key: FILE_ICON_APPLICATION, src: application.icon } }
+                : {}),
+              run: () => openWithApplication(absolutePath, application.id),
             })),
-          });
-        } else if (apps.status !== 'failed') {
-          // The list is read only when this submenu is expanded, so its trigger
-          // starts with one loading row; hovering the trigger starts the read (the
-          // row is clickable too, as a fallback) and the rows are replaced once the
-          // Host answers.
-          items.push({
-            id: FILE_MENU_ITEMS.openWith,
-            label: t('file.openWith'),
-            icon: jsx(IconAppsAddOutlineRegular, {}),
-            submenu: [{ id: 'apps-load', label: t('file.loading') }],
-          });
-        }
-      }
-      items.push({ type: 'separator', id: 'actions-separator' });
-      items.push({
-        id: FILE_MENU_ITEMS.saveAs,
-        label: t('file.saveAs'),
-        icon: jsx(IconDownloadOutlineRegular, {}),
-      });
-      items.push({
-        id: FILE_MENU_ITEMS.copyPath,
-        label: t('file.copyPath'),
-        icon: jsx(IconCopyOutlineRegular, {}),
-      });
-      items.push({
-        id: FILE_MENU_ITEMS.copyContents,
-        label: t('file.copyContents'),
-        icon: jsx(IconDeliverDocRegular, {}),
-      });
-      // 「复制文件」 writes the Host's OS clipboard, which is only the user's own
-      // clipboard while the page and the Host are the same machine. A remote page
-      // gets no entry at all; 「另存为…」 already brings the file over.
-      if (resolved.local === true) {
-        items.push({
-          id: FILE_MENU_ITEMS.copyFile,
-          label: t('file.copyFile'),
-          icon: jsx(IconPaperclipOutlineRegular, {}),
-        });
-      }
-      return items;
+          }];
+        },
+      }), 'dsh-recent-sessions: file 打开方式');
+
+      scope.effect(() => menus.register({
+        id: 'recent-sessions.copyContents',
+        target: 'file',
+        order: 300,
+        resolve: async ({ sessionId, path }, signal) => {
+          const absolutePath = await absolutePathOf(sessionId, path, signal);
+          signal.throwIfAborted();
+          if (absolutePath === undefined) return [];
+          return [{
+            id: 'copyContents',
+            label: t('file.copyContents'),
+            icon: { key: FILE_ICON_COPY_CONTENTS },
+            separatorBefore: true,
+            failureLabel: t('file.copyFailed'),
+            run: () => copyContents(sessionId, absolutePath),
+          }];
+        },
+      }), 'dsh-recent-sessions: file 复制文件内容');
+
+      scope.effect(() => menus.register({
+        id: 'recent-sessions.copyFile',
+        target: 'file',
+        order: 310,
+        resolve: async ({ sessionId, path }, signal) => {
+          if (!isLocalPage()) return [];
+          const absolutePath = await absolutePathOf(sessionId, path, signal);
+          signal.throwIfAborted();
+          if (absolutePath === undefined) return [];
+          return [{
+            id: 'copyFile',
+            label: t('file.copyFile'),
+            icon: { key: FILE_ICON_COPY_FILE },
+            failureLabel: t('file.copyFileFailed'),
+            run: () => copyFileToClipboard(absolutePath),
+          }];
+        },
+      }), 'dsh-recent-sessions: file 复制文件');
     }
 
     /**
-     * Session bridge: publish the facts the overlay menu needs. Renders nothing;
-     * it exists to run inside the Session-scoped slot tree, where `sessionId` and
-     * the standard Session hook are available.
-     * @param {object} props - Session identity, standard Session hook and menu controller.
+     * Session-scoped share naming the Session whose reply owns the changed-files
+     * card. The frame-wide `contextmenu` filter lives in `shell.overlay`, outside
+     * any Session tree, so this is how it learns the captured target's Session.
+     * @returns {object} the share: `attach(sessionId)` returns detach, `current()` reads the newest.
+     */
+    function createSessionShare() {
+      const tokens = [];
+      return {
+        /**
+         * Name this Session as the current one while mounted.
+         * @param {string} sessionId - the mounting Session.
+         * @returns {() => void} detach.
+         */
+        attach(sessionId) {
+          const token = { sessionId };
+          tokens.push(token);
+          return () => {
+            const at = tokens.indexOf(token);
+            if (at !== -1) tokens.splice(at, 1);
+          };
+        },
+        /**
+         * The most recently mounted Session, or undefined before the first one.
+         * @returns {string | undefined} the Session id.
+         */
+        current() {
+          return tokens.length === 0 ? undefined : tokens[tokens.length - 1].sessionId;
+        },
+      };
+    }
+
+    /**
+     * Publish one Session id into the share. Renders nothing; it exists so the
+     * filter runs inside the Session-scoped slot tree.
+     * @param {object} props - Session identity and share.
      * @returns {null} no element.
      */
-    function FileMenuBridge({ sessionId, useSessions, menu }) {
-      const cwd = useSessions((state) => state?.byId?.[sessionId]?.cwd);
-      useEffect(() => menu.attach({ sessionId, cwd }), [menu, sessionId, cwd]);
+    function SessionBridge({ sessionId, share }) {
+      useEffect(() => share.attach(sessionId), [share, sessionId]);
       return null;
     }
 
     /**
-     * Overlay host: the document-level `contextmenu` filter and the file menu.
+     * The `contextmenu` filter the changed-files rows still need.
      *
-     * Right-click is intercepted only when the target is one of the shipped file
-     * references and this plugin has a Session to act on; anything else is left
-     * alone, so the browser's own menu and the chat's text-selection gestures keep
-     * working everywhere else.
-     * @param {object} props - menu controller and translator.
-     * @returns {object | null} the menu while open, otherwise null.
+     * The shipped mention, link and delivered-file surfaces already carry the
+     * unified menu's own trigger; the changed-files rows are buttons without one.
+     * So this overlay intercepts a `contextmenu` only inside that card and opens
+     * the same shared popup against the same `file` target — the entries, their
+     * placement and dismissal stay the popup's, not a second menu's.
+     *
+     * A left click is untouched, and a reference whose Session is unknown is left
+     * to the browser menu.
+     * @param {object} props - Session share and the injected popup opener.
+     * @returns {null} no element.
      */
-    function FileReferenceMenu({ menu, t }) {
-      const state = useSyncExternalStore(menu.subscribe, menu.getSnapshot, menu.getSnapshot);
+    function ChangedFilesMenu({ share, openFile }) {
       useEffect(() => {
         const onContextMenu = (event) => {
           if (event.defaultPrevented) return;
-          const reference = readFileReference(event.target);
+          const reference = readChangedFileReference(event.target);
           if (reference === null) return;
-          // A keyboard-raised contextmenu reports no point; hang the menu off the
-          // reference itself, the same place the pointer would have landed.
+          const sessionId = share.current();
+          if (sessionId === undefined) return;
+          // A keyboard-raised contextmenu reports no point; hang the popup off
+          // the row itself, the same place the pointer would have landed.
           const bounds = reference.element.getBoundingClientRect();
           const keyboard = event.clientX === 0 && event.clientY === 0;
-          const anchor = keyboard
+          const point = keyboard
             ? { x: bounds.left, y: bounds.bottom }
             : { x: event.clientX, y: event.clientY };
-          if (!menu.open(reference, anchor)) return;
+          if (!openFile(sessionId, reference.path, point)) return;
           event.preventDefault();
           event.stopPropagation();
         };
-        // The shipped menu has no submenu-hover callback, so the one submenu it
-        // holds — 「打开方式」 — is recognized by its submenu trigger and its list is
-        // read at that moment rather than while opening the menu.
-        const onMouseOver = (event) => {
-          if (menu.getSnapshot().open !== true) return;
-          const element = event.target instanceof Element ? event.target : null;
-          if (element === null) return;
-          if (element.closest('button[role="menuitem"][aria-haspopup="menu"]') === null) return;
-          menu.loadApplications().catch(() => {});
-        };
         document.addEventListener('contextmenu', onContextMenu, true);
-        document.addEventListener('mouseover', onMouseOver);
-        return () => {
-          document.removeEventListener('contextmenu', onContextMenu, true);
-          document.removeEventListener('mouseover', onMouseOver);
-        };
-      }, [menu]);
-      const open = state.open === true;
-      const notice = state.notice;
-      if (!open && notice === null) return null;
-      return jsxs(Fragment, {
-        children: [
-          open ? jsx(Menu, {
-            key: 'file-menu',
-            open: true,
-            portal: true,
-            autoFocus: true,
-            anchor: jsx('span', { key: 'file-menu-anchor', 'aria-hidden': 'true' }),
-            getAnchorRect: menu.anchorRect,
-            items: fileMenuItems(state, t),
-            onSelect: (id) => { menu.select(id); },
-            onClose: () => { menu.close(); },
-          }) : null,
-          notice === null ? null : jsx(Toast, {
-            key: `file-menu-notice:${notice.id}`,
-            text: notice.text,
-            tone: notice.tone,
-            anchor: notice.anchor ?? undefined,
-            onDone: () => { menu.dismissNotice(notice.id); },
-          }),
-        ],
-      });
+        return () => document.removeEventListener('contextmenu', onContextMenu, true);
+      }, [share, openFile]);
+      return null;
     }
 
     // --------------------------------------------------------------- locales
@@ -2273,30 +1850,17 @@ const VERSION_META = Object.freeze(
       'settings.notifyUnsupported': '当前浏览器不支持系统通知。',
       'notify.done': '会话已完成',
       'notify.doneIn': '「{project}」的会话已完成',
-      'file.loading': '正在检查文件…',
-      'file.missing': '文件不存在',
-      'file.open': '打开文件',
-      'file.reveal': '在资源管理器中打开',
-      'file.sidebar': '在右侧栏打开',
       'file.openWith': '打开方式',
       'file.defaultApp': '{name}（默认）',
-      'file.saveAs': '另存为…',
-      'file.copyPath': '复制路径',
       'file.copyContents': '复制文件内容',
       'file.copyFile': '复制文件',
       'file.fileCopied': '文件已复制到剪贴板',
       'file.copyFileFailed': '无法复制文件',
       'file.tooLarge': '文件太大，无法读取',
-      'file.pathCopied': '路径已复制',
       'file.contentsCopied': '文件内容已复制',
-      'file.saved': '副本已保存',
       'file.copyFailed': '复制失败',
       'file.notText': '这不是文本文件，无法复制内容',
       'file.openFailed': '无法打开文件',
-      'file.revealFailed': '无法在资源管理器中显示',
-      'file.sidebarFailed': '无法在右侧栏打开',
-      'file.saveFailed': '无法保存副本',
-      'file.actionFailed': '操作失败',
       'settings.invalid': '默认条数和展开步长请输入 1 到 {maxCount} 之间的整数，高度请输入 1 到 {maxRows} 之间的整数。',
       'settings.saved': '设置已保存',
       'settings.failed': '无法保存设置',
@@ -2364,30 +1928,17 @@ const VERSION_META = Object.freeze(
       'settings.notifyUnsupported': 'This browser has no system notification support.',
       'notify.done': 'Session finished',
       'notify.doneIn': 'A session in “{project}” finished',
-      'file.loading': 'Checking the file…',
-      'file.missing': 'File not found',
-      'file.open': 'Open file',
-      'file.reveal': 'Reveal in File Explorer',
-      'file.sidebar': 'Open in sidebar',
       'file.openWith': 'Open with',
       'file.defaultApp': '{name} (default)',
-      'file.saveAs': 'Save as…',
-      'file.copyPath': 'Copy path',
       'file.copyContents': 'Copy file contents',
       'file.copyFile': 'Copy file',
       'file.fileCopied': 'File copied to the clipboard',
       'file.copyFileFailed': 'Could not copy the file',
       'file.tooLarge': 'The file is too large to read',
-      'file.pathCopied': 'Path copied',
       'file.contentsCopied': 'File contents copied',
-      'file.saved': 'Copy saved',
       'file.copyFailed': 'Could not copy',
       'file.notText': 'This is not a text file, so its contents cannot be copied',
       'file.openFailed': 'Could not open the file',
-      'file.revealFailed': 'Could not reveal the file',
-      'file.sidebarFailed': 'Could not open it in the sidebar',
-      'file.saveFailed': 'Could not save a copy',
-      'file.actionFailed': 'The action failed',
       'settings.invalid': 'Enter 1–{maxCount} for the default count and expansion step, and 1–{maxRows} for the height.',
       'settings.saved': 'Preference saved',
       'settings.failed': 'Could not save preference',
@@ -2556,26 +2107,46 @@ const VERSION_META = Object.freeze(
         inject: () => ({ ...hooks(), openSession, t: translate.current }),
       }, DesktopNotifier));
 
-      // The file-reference menu is frame-wide: the overlay host owns the
-      // `contextmenu` filter and the popup, while a Session-scoped bridge hands it
-      // the workspace root the reply's relative paths resolve against. The bridge
-      // renders nothing, so the conversation gains no visible row.
-      const fileMenu = createFileMenu(ctx, translate);
-      ctx.on('connection/reset', () => { fileMenu.resetHostFacts(); });
+      // File references: the shipped mention, link and delivered-file surfaces
+      // already carry the unified menu's trigger, so this plugin only contributes
+      // its three extra entries to that shared popup.
+      ctx.inject(['contextMenus'], (scope) => {
+        registerFileContextMenu(ctx, scope, translate);
+      });
+
+      // The changed-files card's rows are the one reference surface the shipped
+      // trigger does not reach. A Session-scoped bridge names the owning Session
+      // and the frame-wide filter opens the same shared popup for those rows.
+      const sessionShare = createSessionShare();
+      const openFileMenu = (sessionId, path, point) => {
+        let menus;
+        try {
+          menus = ctx.get('contextMenus');
+        } catch {
+          menus = undefined;
+        }
+        if (menus === undefined) return false;
+        try {
+          menus.open({ kind: 'file', value: { sessionId, path } }, point);
+          return true;
+        } catch {
+          return false;
+        }
+      };
       ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
         name: 'conversation.composer.dock',
         id: 'dsh-recent-sessions-file-menu',
         order: 80,
         locale: NS,
-        inject: () => ({ menu: fileMenu }),
-      }, FileMenuBridge));
+        inject: () => ({ share: sessionShare }),
+      }, SessionBridge));
       ctx.slots.inject('shell.overlay', () => ctx.slots.register({
         name: 'shell.overlay',
         id: 'dsh-recent-sessions-file-menu',
         order: 92,
         locale: NS,
-        inject: () => ({ menu: fileMenu, t: translate.current }),
-      }, FileReferenceMenu));
+        inject: () => ({ share: sessionShare, openFile: openFileMenu }),
+      }, ChangedFilesMenu));
     }
 
     return { inject, apply };

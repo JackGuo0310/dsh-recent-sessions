@@ -1,7 +1,7 @@
 {
   "name": "@jackguo0310/dsh-recent-sessions",
-  "version": "0.5.10",
-  "description": "在 DSH 侧边栏工作区下方增加可折叠的「最近」会话分组，跨项目汇总近期会话，支持重命名/分叉/归档；会话跑完后可发 Windows 桌面通知；并为助手回复中的文件引用加上右键菜单（打开/打开方式/另存为/复制路径/复制内容/资源管理器定位）。",
+  "version": "0.5.11",
+  "description": "在 DSH 侧边栏工作区下方增加可折叠的「最近」会话分组，跨项目汇总近期会话，支持重命名/分叉/归档；会话跑完后可发 Windows 桌面通知；并向 Harness 统一右键菜单贡献文件引用的「打开方式 / 复制文件内容 / 复制文件」三项动作。",
   "type": "module",
   "exports": {
     ".": "./index.js",
@@ -45,7 +45,7 @@
     "@deepseek-ai/schemastery": "~3.18.5-alpha.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.2.1-alpha.1 <0.3"
+    "@deepseek-ai/dsh": ">=0.2.2-alpha.2 <0.3"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {
