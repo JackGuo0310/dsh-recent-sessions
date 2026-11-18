@@ -64,8 +64,8 @@ window.__ModuleLoader__.load({
 const VERSION_META = Object.freeze(
   {
     "repoName": "@jackguo0310/dsh-recent-sessions",
-    "tag": "v0.5.12",
-    "describe": "v0.5.12",
+    "tag": "v0.5.13",
+    "describe": "v0.5.13",
     "commit": null
   }
 );
@@ -516,7 +516,7 @@ const VERSION_META = Object.freeze(
      * dismissal and keyboard walk.
      *
      * The menu is the shipped `Menu` primitive, so a right-click is positioned
-     * through its `getAnchorRect` the way the file menu positions at a pointer
+     * through its `anchorPoint` the way the file menu positions at a pointer
      * point; opening from 「⋯」 keeps the default measurement of that button.
      * @param {object} props - row facts, status, selection, actions and translator.
      * @returns {object} the row element.
@@ -608,21 +608,15 @@ const VERSION_META = Object.freeze(
                 },
                 portal: true,
                 closeOnPointerLeave: true,
-                // A right-click menu is a pointer-positioned popup, so it takes
-                // the keyboard (the first row) and gives it back to the row; the
-                // 「⋯」 trigger keeps its default anchor measurement and focus
-                // hand-back.
+                // A right-click menu is a pointer-positioned popup: `Menu` takes
+                // the pointer as `anchorPoint` and lays out a zero-size anchor of
+                // its own there, so it needs no anchor child in that case — the
+                // shipped context menu passes `anchor: null` the same way.
+                // Opening from 「⋯」 keeps measuring that button.
                 autoFocus: menuPoint !== null,
-                getAnchorRect: menuPoint === null ? undefined : () => ({
-                  left: menuPoint.x,
-                  top: menuPoint.y,
-                  right: menuPoint.x,
-                  bottom: menuPoint.y,
-                  width: 0,
-                  height: 0,
-                }),
+                anchorPoint: menuPoint ?? undefined,
                 returnFocus: menuPoint === null ? undefined : () => rowRef.current,
-                anchor: jsx('button', {
+                anchor: menuPoint === null ? jsx('button', {
                   type: 'button',
                   className: 'dshRecent_actionButton',
                   'aria-label': t('row.menu.aria', { name: label }),
@@ -632,7 +626,7 @@ const VERSION_META = Object.freeze(
                     setMenuOpen((open) => !open);
                   },
                   children: jsx(IconEllipsisOutlineRegular, {}),
-                }),
+                }) : null,
                 children: jsxs(Fragment, { children: [
                   // Deliberately NOT the shipped pin action: that one writes the
                   // Host pin ledger and reorders the owning Workspace. 「最近」 keeps
@@ -1602,14 +1596,11 @@ const VERSION_META = Object.freeze(
       const currentSession = () => (bridges.length === 0 ? null : bridges[bridges.length - 1].session);
 
       /**
-       * Anchor rectangle for the shipped `Menu`: a zero-size box at the pointer,
-       * which is then clamped against the window edges by the primitive itself.
-       * @returns {object} the rectangle `Menu` positions against.
+       * Anchor point for the shipped `Menu`: the viewport point the gesture
+       * landed on, which the primitive clamps against the window edges itself.
+       * @returns {{ x: number, y: number }} the point `Menu` positions against.
        */
-      const anchorRect = () => {
-        const point = snapshot.anchor ?? { x: 0, y: 0 };
-        return { left: point.x, top: point.y, right: point.x, bottom: point.y, width: 0, height: 0 };
-      };
+      const anchorPoint = () => snapshot.anchor ?? { x: 0, y: 0 };
 
       /**
        * Whether this page talks to the Host over loopback — the browser and the
@@ -2053,7 +2044,7 @@ const VERSION_META = Object.freeze(
         close,
         select,
         loadApplications,
-        anchorRect,
+        anchorPoint,
         dismissNotice,
         resetHostFacts,
       };
@@ -2232,8 +2223,10 @@ const VERSION_META = Object.freeze(
             open: true,
             portal: true,
             autoFocus: true,
-            anchor: jsx('span', { key: 'file-menu-anchor', 'aria-hidden': 'true' }),
-            getAnchorRect: menu.anchorRect,
+            // The popup sits at the pointer: `Menu` anchors a zero-size element
+            // there through `anchorPoint`, so it needs no anchor child.
+            anchor: null,
+            anchorPoint: menu.anchorPoint(),
             items: fileMenuItems(state, t),
             onSelect: (id) => { menu.select(id); },
             onClose: () => { menu.close(); },
